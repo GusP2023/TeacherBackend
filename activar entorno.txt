@@ -1,0 +1,5 @@
+Si sale error en PowerShell (política de ejecución):
+bashSet-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+PARA ACTIVAR:
+venv\Scripts\Activate.ps1

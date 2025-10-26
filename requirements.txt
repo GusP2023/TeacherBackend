@@ -1,0 +1,38 @@
+# ========================================
+# CORE - Framework y servidor
+# ========================================
+fastapi==0.118.0
+uvicorn[standard]==0.37.0
+gunicorn
+
+# ========================================
+# DATABASE - SQLAlchemy y PostgreSQL
+# ========================================
+sqlalchemy==2.0.43
+psycopg2-binary==2.9.10
+asyncpg==0.30.0
+
+# ========================================
+# VALIDATION - Pydantic
+# ========================================
+pydantic==2.11.10
+pydantic-settings==2.11.0
+email-validator==2.2.0
+
+# ========================================
+# SECURITY - Auth y passwords
+# ========================================
+bcrypt==4.1.2
+python-jose[cryptography]==3.5.0
+cryptography==43.0.3
+
+# ========================================
+# UTILS - Utilidades
+# ========================================
+python-dotenv==1.1.1
+python-multipart==0.0.12
+
+# ========================================
+# JOBS - Tareas programadas
+# ========================================
+apscheduler==3.10.4
