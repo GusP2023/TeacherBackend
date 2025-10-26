@@ -11,7 +11,8 @@ Este módulo centraliza todas las configuraciones:
 Las variables pueden ser sobreescritas con variables de entorno (.env)
 """
 
-from typing import List
+from pydantic import Field, validator
+from typing import List, Optional
 from pydantic_settings import BaseSettings
 
 
@@ -57,18 +58,31 @@ class Settings(BaseSettings):
     # ========================================
     # CORS (Cross-Origin Resource Sharing)
     # ========================================
-    # ALLOWED_ORIGINS: Orígenes permitidos (separados por coma en variable de entorno)
-    # Desarrollo: "http://localhost:3000,http://localhost:3001"
-    # Producción: "https://tuapp.com,https://www.tuapp.com"
-    ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
+    # 1. VARIABLE DE ENTORNO (CADENA): Aquí es donde Pydantic carga la cadena de Render.
+    # Usamos ALLOWED_ORIGINS como la fuente principal de la cadena.
+    CORS_ORIGINS_STR: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000", 
+        alias="ALLOWED_ORIGINS" # Le decimos a Pydantic que busque la variable de entorno ALLOWED_ORIGINS
+    )
+    
+    # 2. LISTA PROCESADA (Lo que usa el middleware)
+    BACKEND_CORS_ORIGINS: List[str] = [] # Se inicializa vacía, se llena en el validador
+    
+    # [ELIMINA las variables ALLOWED_ORIGINS: str y BACKEND_CORS_ORIGINS: List[str] antiguas]
 
-    # Deprecated: Usar ALLOWED_ORIGINS en su lugar
-    BACKEND_CORS_ORIGINS: List[str] = [
-        "http://localhost:3000",  # Next.js dev
-        "http://localhost:3001",  # Next.js alternate port
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-    ]
+    # ... (otras variables)
+    
+    # CRÍTICO: Este método convierte la cadena del entorno en una lista que FastAPI necesita.
+    @validator("BACKEND_CORS_ORIGINS", pre=True)
+    def assemble_cors_origins(cls, v: Optional[List[str]], values: dict) -> List[str] | List:
+        # Usa la cadena cargada del entorno (CORS_ORIGINS_STR)
+        origins_str = values.get("CORS_ORIGINS_STR", "")
+        if origins_str:
+            # Separa la cadena por comas y elimina espacios en blanco
+            return [url.strip() for url in origins_str.split(',')]
+        
+        # Si no se encontró la variable, devuelve la lista vacía o el valor por defecto
+        return v or []
     
     # ========================================
     # TARIFAS POR DEFECTO (opcional)
