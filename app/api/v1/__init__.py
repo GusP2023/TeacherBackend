@@ -24,6 +24,7 @@ from app.api.v1.schedules import router as schedules_router
 from app.api.v1.classes import router as classes_router
 from app.api.v1.attendances import router as attendances_router
 from app.api.v1.jobs import router as jobs_router
+from app.api.v1.sync import router as sync_router
 
 __all__ = [
     "auth_router",
@@ -34,5 +35,6 @@ __all__ = [
     "schedules_router",
     "classes_router",
     "attendances_router",
-    "jobs_router"
+    "jobs_router",
+    "sync_router"
 ]

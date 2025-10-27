@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     # ========================================
     SECRET_KEY: str = "dev-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30  # 30 minutos
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200  # 30 días (sliding window)
     
     # ========================================
     # API

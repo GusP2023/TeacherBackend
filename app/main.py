@@ -22,11 +22,14 @@ Para crear las tablas:
     python -m app.core.init_db
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from app.core.config import settings
 from app.core.scheduler import start_scheduler, shutdown_scheduler
+from app.core.security import should_refresh_token, refresh_access_token
 
 # ========================================
 # IMPORTAR ROUTERS
@@ -40,7 +43,8 @@ from app.api.v1 import (
     schedules_router,
     classes_router,
     attendances_router,
-    jobs_router
+    jobs_router,
+    sync_router
 )
 
 # ========================================
@@ -67,6 +71,55 @@ from app.models import (
     AttendanceStatus,
 )
 
+
+# ========================================
+# MIDDLEWARE DE TOKEN REFRESH (SLIDING WINDOW)
+# ========================================
+
+class TokenRefreshMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware que implementa sliding window para tokens JWT.
+
+    En cada respuesta exitosa (200-299):
+    1. Verifica si el token actual tiene menos de 25 días de vida
+    2. Si es así, emite un nuevo token con 30 días adicionales
+    3. Incluye el nuevo token en el header X-New-Token
+
+    El frontend debe detectar este header y guardar automáticamente el nuevo token.
+
+    Esto permite que usuarios activos nunca vean expirar su sesión,
+    mientras que usuarios inactivos por más de 30 días deben reautenticarse.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        # Procesar la petición normalmente
+        response: Response = await call_next(request)
+
+        # Solo procesar respuestas exitosas (200-299)
+        if 200 <= response.status_code < 300:
+            # Intentar extraer token del header Authorization
+            auth_header = request.headers.get("Authorization")
+
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header.replace("Bearer ", "")
+
+                try:
+                    # Verificar si el token debe ser refrescado
+                    if should_refresh_token(token):
+                        # Emitir nuevo token
+                        new_token = refresh_access_token(token)
+
+                        # Añadir header con nuevo token
+                        response.headers["X-New-Token"] = new_token
+
+                except Exception:
+                    # Si hay cualquier error, no hacer nada
+                    # (evitar que el middleware rompa peticiones legítimas)
+                    pass
+
+        return response
+
+
 # ========================================
 # CREAR APLICACIÓN FASTAPI
 # ========================================
@@ -85,7 +138,7 @@ app = FastAPI(
 # CORS dinámico según entorno
 # Desarrollo: localhost
 # Producción: dominios específicos desde variable de entorno ALLOWED_ORIGINS
-origins = settings.ALLOWED_ORIGINS.split(",")
+# Los orígenes se procesan automáticamente en config.py mediante el validador
 
 app.add_middleware(
     CORSMiddleware,
@@ -93,7 +146,16 @@ app.add_middleware(
     allow_credentials=True,  # Permite cookies/auth headers
     allow_methods=["*"],  # Permite todos los métodos (GET, POST, PUT, DELETE, etc)
     allow_headers=["*"],  # Permite todos los headers
+    expose_headers=["X-New-Token"],  # Exponer header de token refresh al frontend
 )
+
+# ========================================
+# TOKEN REFRESH MIDDLEWARE
+# ========================================
+
+# Registrar middleware de sliding window token
+# IMPORTANTE: Debe ir DESPUÉS de CORS para que el header X-New-Token sea accesible
+app.add_middleware(TokenRefreshMiddleware)
 
 # ========================================
 # EVENTOS DE CICLO DE VIDA
@@ -221,6 +283,12 @@ app.include_router(
     jobs_router,
     prefix=f"{settings.API_V1_PREFIX}/jobs",
     tags=["Jobs"]
+)
+
+app.include_router(
+    sync_router,
+    prefix=f"{settings.API_V1_PREFIX}/sync",
+    tags=["Sync"]
 )
 
 

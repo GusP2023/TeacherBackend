@@ -87,27 +87,32 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
-    Crea un token JWT.
-    
+    Crea un token JWT con sliding window (renovación automática).
+
     Args:
         data: Datos a incluir en el token (ej: {"sub": "user@email.com"})
-        expires_delta: Tiempo de expiración (opcional)
-        
+        expires_delta: Tiempo de expiración (opcional, default: 30 días)
+
     Returns:
         Token JWT (string)
-        
+
     Example:
         token = create_access_token({"sub": "user@example.com"})
+
+    Note:
+        Con sliding window, el token se renueva automáticamente si tiene
+        menos de 25 días de vida restante cuando se usa (ver middleware).
     """
     to_encode = data.copy()
-    
+
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
+        # Default: 30 días (43200 minutos) para sliding window
         expire = datetime.now(timezone.utc) + timedelta(
             minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
-    
+
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(
         to_encode,
@@ -120,16 +125,16 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 def decode_token(token: str) -> dict:
     """
     Decodifica y valida un token JWT.
-    
+
     Args:
         token: Token JWT a decodificar
-        
+
     Returns:
         Payload del token (dict)
-        
+
     Raises:
         HTTPException: Si el token es inválido o expirado
-        
+
     Example:
         payload = decode_token(token)
         email = payload.get("sub")
@@ -147,6 +152,86 @@ def decode_token(token: str) -> dict:
             detail="No se pudo validar las credenciales",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def should_refresh_token(token: str, refresh_threshold_days: int = 25) -> bool:
+    """
+    Determina si un token debe ser refrescado basándose en su tiempo de vida restante.
+
+    Args:
+        token: Token JWT a verificar
+        refresh_threshold_days: Días mínimos de vida restante para NO refrescar (default: 25)
+                               Si le quedan menos de 25 días, se debe refrescar.
+
+    Returns:
+        True si el token debe ser refrescado, False si aún es válido por suficiente tiempo
+
+    Example:
+        if should_refresh_token(token):
+            new_token = refresh_access_token(token)
+
+    Note:
+        Configurado para tokens de 30 días:
+        - Si tiene 26-30 días restantes: NO refrescar
+        - Si tiene 0-25 días restantes: SÍ refrescar (se emitirá nuevo token de 30 días)
+    """
+    try:
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+            options={"verify_exp": False}  # No validar expiración aquí
+        )
+
+        exp_timestamp = payload.get("exp")
+        if not exp_timestamp:
+            return True  # Si no tiene exp, refrescar
+
+        expire_datetime = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
+        now = datetime.now(timezone.utc)
+
+        time_remaining = expire_datetime - now
+
+        # Si le quedan menos de X días, refrescar
+        return time_remaining < timedelta(days=refresh_threshold_days)
+
+    except JWTError:
+        return False  # Si el token es inválido, no intentar refrescar
+
+
+def refresh_access_token(token: str) -> str:
+    """
+    Refresca un token JWT válido, emitiendo uno nuevo con 30 días adicionales.
+
+    Args:
+        token: Token JWT actual (debe ser válido)
+
+    Returns:
+        Nuevo token JWT con 30 días de expiración
+
+    Raises:
+        HTTPException: Si el token actual es inválido o expirado
+
+    Example:
+        new_token = refresh_access_token(old_token)
+
+    Note:
+        Esta función valida que el token sea legítimo antes de emitir uno nuevo.
+        Solo refresca el timestamp de expiración, mantiene el mismo payload (sub, etc).
+    """
+    # Validar y extraer payload del token actual
+    payload = decode_token(token)  # Esto valida que sea legítimo
+
+    email = payload.get("sub")
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido - sin email"
+        )
+
+    # Crear nuevo token con el mismo email pero nueva expiración
+    new_token = create_access_token({"sub": email})
+    return new_token
 
 
 # ========================================
