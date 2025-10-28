@@ -143,7 +143,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,  # ✅ Solo orígenes permitidos (configurable por entorno)
-    allow_credentials=false,  # Permite cookies/auth headers
+    allow_credentials=False,  # Permite cookies/auth headers
     allow_methods=["*"],  # Permite todos los métodos (GET, POST, PUT, DELETE, etc)
     allow_headers=["*"],  # Permite todos los headers
     expose_headers=["X-New-Token"],  # Exponer header de token refresh al frontend
