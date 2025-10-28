@@ -26,12 +26,12 @@ from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 
 # Importar schemas de cada modelo (para reutilizar validaciones)
-from app.schemas.student import StudentRead
-from app.schemas.enrollment import EnrollmentRead
-from app.schemas.schedule import ScheduleRead
-from app.schemas.class_schema import ClassRead
-from app.schemas.attendance import AttendanceRead
-from app.schemas.instrument import InstrumentRead
+from app.schemas.student import StudentResponse
+from app.schemas.enrollment import EnrollmentResponse
+from app.schemas.schedule import ScheduleResponse
+from app.schemas.class_schema import ClassResponse
+from app.schemas.attendance import AttendanceResponse
+from app.schemas.instrument import InstrumentResponse
 
 
 # ========================================
@@ -116,12 +116,12 @@ class InitialSyncResponse(BaseModel):
     }
     """
 
-    students: List[StudentRead]
-    enrollments: List[EnrollmentRead]
-    schedules: List[ScheduleRead]
-    classes: List[ClassRead]
-    attendances: List[AttendanceRead]
-    instruments: List[InstrumentRead]
+    students: List[StudentResponse]
+    enrollments: List[EnrollmentResponse]
+    schedules: List[ScheduleResponse]
+    classes: List[ClassResponse]
+    attendances: List[AttendanceResponse]
+    instruments: List[InstrumentResponse]
     metadata: SyncMetadata
 
 
@@ -132,12 +132,12 @@ class DeltaSyncCreated(BaseModel):
     Separados por tipo de entidad.
     """
 
-    students: List[StudentRead] = []
-    enrollments: List[EnrollmentRead] = []
-    schedules: List[ScheduleRead] = []
-    classes: List[ClassRead] = []
-    attendances: List[AttendanceRead] = []
-    instruments: List[InstrumentRead] = []
+    students: List[StudentResponse] = []
+    enrollments: List[EnrollmentResponse] = []
+    schedules: List[ScheduleResponse] = []
+    classes: List[ClassResponse] = []
+    attendances: List[AttendanceResponse] = []
+    instruments: List[InstrumentResponse] = []
 
 
 class DeltaSyncUpdated(BaseModel):
@@ -148,12 +148,12 @@ class DeltaSyncUpdated(BaseModel):
     Solo incluye registros donde updated_at >= since (pero created_at < since).
     """
 
-    students: List[StudentRead] = []
-    enrollments: List[EnrollmentRead] = []
-    schedules: List[ScheduleRead] = []
-    classes: List[ClassRead] = []
-    attendances: List[AttendanceRead] = []
-    instruments: List[InstrumentRead] = []
+    students: List[StudentResponse] = []
+    enrollments: List[EnrollmentResponse] = []
+    schedules: List[ScheduleResponse] = []
+    classes: List[ClassResponse] = []
+    attendances: List[AttendanceResponse] = []
+    instruments: List[InstrumentResponse] = []
 
 
 class DeltaSyncDeleted(BaseModel):
