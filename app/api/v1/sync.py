@@ -128,11 +128,16 @@ async def sync_initial(
     # ========================================
     # 5. CARGAR ASISTENCIAS DEL AÑO
     # ========================================
-    attendances_query = select(Attendance).where(
-        and_(
-            Attendance.teacher_id == current_teacher.id,
-            Attendance.date >= year_start,
-            Attendance.date <= year_end,
+    # Attendance no tiene teacher_id ni date - hay que hacer JOIN con Class
+    attendances_query = (
+        select(Attendance)
+        .join(Class, Attendance.class_id == Class.id)
+        .where(
+            and_(
+                Class.teacher_id == current_teacher.id,
+                Class.date >= year_start,
+                Class.date <= year_end,
+            )
         )
     )
     attendances_result = await db.execute(attendances_query)
@@ -301,10 +306,15 @@ async def sync_delta(
     # ========================================
     # 5. ASISTENCIAS CAMBIADAS
     # ========================================
-    attendances_query = select(Attendance).where(
-        and_(
-            Attendance.teacher_id == current_teacher.id,
-            or_(Attendance.created_at >= since, Attendance.updated_at >= since),
+    # Attendance no tiene teacher_id - hay que hacer JOIN con Class
+    attendances_query = (
+        select(Attendance)
+        .join(Class, Attendance.class_id == Class.id)
+        .where(
+            and_(
+                Class.teacher_id == current_teacher.id,
+                or_(Attendance.created_at >= since, Attendance.updated_at >= since),
+            )
         )
     )
     attendances_result = await db.execute(attendances_query)
