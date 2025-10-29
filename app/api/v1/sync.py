@@ -11,7 +11,7 @@ Estrategia:
 3. Offline → usar datos de localStorage (UX instantáneo)
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,9 +83,9 @@ async def sync_initial(
     # Timestamp de sincronización
     sync_time = datetime.now(timezone.utc)
 
-    # Rango de fechas del año solicitado
-    year_start = f"{request.year}-01-01"
-    year_end = f"{request.year}-12-31"
+    # Rango de fechas del año solicitado (OBJETOS DATE para PostgreSQL)
+    year_start = date(request.year, 1, 1)   # E.g., 2025-01-01
+    year_end = date(request.year, 12, 31)   # E.g., 2025-12-31
 
     # ========================================
     # 1. CARGAR ALUMNOS DEL PROFESOR
