@@ -14,8 +14,9 @@ Relaciones:
 - 1:N con Classes (un profesor imparte muchas clases)
 """
 
+from datetime import date
 from decimal import Decimal
-from sqlalchemy import String, Boolean, Numeric
+from sqlalchemy import String, Boolean, Numeric, Integer, ForeignKey, Date, Text, Table, Column
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List, TYPE_CHECKING
 
@@ -27,6 +28,25 @@ if TYPE_CHECKING:
     from .enrollment import Enrollment
     from .schedule import Schedule
     from .class_model import Class
+    from .organization import Organization
+    from .instrument import Instrument
+
+# Tabla de asociación Teacher <-> Instrument (many-to-many)
+teacher_instruments = Table(
+    'teacher_instruments',
+    Base.metadata,
+    Column('teacher_id', Integer, ForeignKey('teachers.id', ondelete='CASCADE'), primary_key=True),
+    Column('instrument_id', Integer, ForeignKey('instruments.id', ondelete='CASCADE'), primary_key=True),
+)
+
+
+# Roles válidos — definidos como constantes para reutilizar en todo el backend
+ROLE_ORG_ADMIN     = "org_admin"      # Directora/dueño: acceso total
+ROLE_TEACHER       = "teacher"        # Profesor: solo sus alumnos
+ROLE_COORDINATOR   = "coordinator"    # Asistente académico: lectura general
+ROLE_ADMINISTRATIVE = "administrative" # Secretaria/admin: finanzas/agenda
+
+VALID_ROLES = [ROLE_ORG_ADMIN, ROLE_TEACHER, ROLE_COORDINATOR, ROLE_ADMINISTRATIVE]
 
 
 class Teacher(Base, TimestampMixin):
@@ -89,11 +109,29 @@ class Teacher(Base, TimestampMixin):
     )
     
     phone: Mapped[str | None] = mapped_column(
-        String(50), 
+        String(50),
         nullable=True,
         comment="Teléfono de contacto (opcional)"
     )
-    
+
+    birthdate: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        comment="Fecha de nacimiento del profesor"
+    )
+
+    bio: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Descripción o presentación breve del profesor"
+    )
+
+    avatar_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="URL de la foto de perfil"
+    )
+
     tariff_individual: Mapped[Decimal] = mapped_column(
         Numeric(10, 2),
         nullable=False,
@@ -116,31 +154,61 @@ class Teacher(Base, TimestampMixin):
     )
 
     # ========================================
+    # MULTI-TENANT: organización y rol
+    # ========================================
+
+    organization_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        nullable=True,  # nullable en el modelo para compatibilidad con datos previos
+        index=True,
+        comment="FK a la escuela/organización a la que pertenece"
+    )
+
+    role: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default=ROLE_ORG_ADMIN,  # default org_admin: datos existentes son dueños
+        server_default=ROLE_ORG_ADMIN,
+        comment="Rol del teacher: org_admin|teacher|coordinator|administrative"
+    )
+
+    # ========================================
     # RELACIONES
     # ========================================
-    
+
+    organization: Mapped["Organization | None"] = relationship(
+        back_populates="teachers",
+        lazy="selectin"
+    )
+
+    instruments: Mapped[List["Instrument"]] = relationship(
+        secondary=teacher_instruments,
+        lazy="selectin",
+    )
+
     students: Mapped[List["Student"]] = relationship(
         back_populates="teacher",
-        cascade="all, delete-orphan",  # Si se elimina teacher, se eliminan sus students
-        lazy="selectin"                # Optimizado para FastAPI async
+        cascade="all, delete-orphan",
+        lazy="noload"
     )
     
     enrollments: Mapped[List["Enrollment"]] = relationship(
         back_populates="teacher",
-        cascade="all, delete-orphan",  # Si se elimina teacher, se eliminan sus enrollments
-        lazy="selectin"
+        cascade="all, delete-orphan",
+        lazy="noload"
     )
     
     schedules: Mapped[List["Schedule"]] = relationship(
         back_populates="teacher",
         cascade="all, delete-orphan",
-        lazy="selectin"
+        lazy="noload"
     )
     
     classes: Mapped[List["Class"]] = relationship(
         back_populates="teacher",
         cascade="all, delete-orphan",
-        lazy="selectin"
+        lazy="noload"
     )
 
     def __repr__(self) -> str:

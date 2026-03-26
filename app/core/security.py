@@ -281,11 +281,81 @@ async def get_current_teacher(
             detail="Teacher no encontrado",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    if not teacher_obj.active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Teacher inactivo"
-        )
-    
+
+    return teacher_obj
+
+
+# ========================================
+# CONTROL DE ROLES
+# ========================================
+
+def require_role(*allowed_roles: str):
+    """
+    Dependency que verifica que el teacher autenticado tenga uno de los roles permitidos.
+
+    Uso en endpoints:
+        @router.post("/admin/invite")
+        async def invite(teacher = Depends(require_role('org_admin'))):
+            ...
+
+        @router.post("/jobs/regenerate")
+        async def regen(teacher = Depends(require_role('org_admin', 'teacher'))):
+            ...
+
+    Raises:
+        403: Si el teacher no tiene el rol requerido
+    """
+    async def _check(
+        current_teacher = Depends(get_current_teacher)
+    ):
+        if current_teacher.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Permisos insuficientes. "
+                    f"Se requiere uno de: {', '.join(allowed_roles)}. "
+                    f"Tu rol actual: {current_teacher.role}"
+                ),
+            )
+        return current_teacher
+    return _check
+
+
+async def get_current_teacher_ws(
+    token: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Autenticación para WebSocket connections
+
+    Similar a get_current_teacher pero recibe el token directamente
+    en lugar de usar HTTPBearer (que no funciona con WebSockets)
+
+    Args:
+        token: JWT token from query parameter
+        db: Database session
+
+    Returns:
+        Teacher object if valid
+
+    Raises:
+        Exception: Si el token es inválido o el teacher no existe
+    """
+    # Decodificar token
+    payload = decode_token(token)
+    email: str = payload.get("sub")
+
+    if email is None:
+        raise Exception("Token inválido - sin email")
+
+    # Buscar teacher en BD
+    from app.crud import teacher as teacher_crud
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as session:
+        teacher_obj = await teacher_crud.get_by_email(session, email)
+
+    if teacher_obj is None:
+        raise Exception("Teacher no encontrado")
+
     return teacher_obj

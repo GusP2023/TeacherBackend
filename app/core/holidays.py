@@ -30,7 +30,7 @@ from datetime import date
 HOLIDAYS_2025 = [
     # Enero
     date(2025, 1, 1),   # Año Nuevo
-    date(2025, 1, 22),  # Estado Plurinacional de Bolivia
+    date(2025, 1, 23),  # Estado Plurinacional de Bolivia
 
     # Febrero - Carnaval (variable)
     date(2025, 2, 24),  # Lunes de Carnaval
@@ -64,7 +64,7 @@ HOLIDAYS_2025 = [
 HOLIDAYS_2026 = [
     # Enero
     date(2026, 1, 1),   # Año Nuevo
-    date(2026, 1, 22),  # Estado Plurinacional de Bolivia
+    date(2026, 1, 23),  # Estado Plurinacional de Bolivia
 
     # Febrero - Carnaval (variable - VERIFICAR FECHAS)
     date(2026, 2, 16),  # Lunes de Carnaval (aproximado)

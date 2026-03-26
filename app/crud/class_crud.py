@@ -21,6 +21,11 @@ async def get(db: AsyncSession, class_id: int) -> Class | None:
     Returns:
         Class si existe, None si no
     """
+    # Guardar contra IDs no positivos (IDs temporales negativos desde cliente)
+    # Evita pasar valores fuera de rango a asyncpg (int32) y lanzar excepciones 500
+    if class_id is None or class_id <= 0:
+        return None
+
     result = await db.execute(
         select(Class).where(Class.id == class_id)
     )
@@ -89,10 +94,11 @@ async def get_by_date_range(
 
 async def create(db: AsyncSession, class_data: ClassCreate) -> Class:
     """
-    Crear una clase nueva (genérica - para generación automática)
+    Crear una clase nueva (genérica - para generación automática o eventos extra)
     
-    Usada principalmente por el job que genera clases desde schedules.
-    NO valida créditos ni descuenta nada.
+    VALIDACIÓN:
+    - type='regular' o 'recovery' → enrollment_id es OBLIGATORIO
+    - type='extra' → enrollment_id puede ser None (evento sin alumno)
     
     Args:
         db: Sesión de base de datos
@@ -100,7 +106,15 @@ async def create(db: AsyncSession, class_data: ClassCreate) -> Class:
     
     Returns:
         Class creada con id asignado
+    
+    Raises:
+        ValueError: Si falta enrollment_id para type regular/recovery
     """
+    # Validar enrollment_id según el tipo
+    if class_data.type in [ClassType.REGULAR, ClassType.RECOVERY]:
+        if not class_data.enrollment_id:
+            raise ValueError(f"enrollment_id es obligatorio para clases de tipo '{class_data.type.value}'")
+    
     class_obj = Class(**class_data.model_dump())
     
     db.add(class_obj)
@@ -268,10 +282,6 @@ async def delete_recovery(db: AsyncSession, class_id: int) -> bool:
     # Validar que sea recovery
     if class_obj.type != ClassType.RECOVERY:
         raise ValueError(f"Solo se pueden eliminar clases de recuperación. Esta clase es tipo '{class_obj.type}'")
-    
-    # Validar que NO tenga attendance
-    if class_obj.attendance:
-        raise ValueError("No se puede eliminar una clase con asistencia marcada")
     
     # Obtener el enrollment
     result = await db.execute(

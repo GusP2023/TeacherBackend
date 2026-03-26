@@ -64,21 +64,23 @@ class ClassBase(BaseModel):
     """
     Campos comunes de una clase específica.
     
-    - enrollment_id: a qué inscripción pertenece
+    - enrollment_id: a qué inscripción pertenece (opcional para type='extra')
     - date: fecha específica de la clase (ej: 2025-01-21)
     - time: hora específica (ej: 16:00)
     - duration: duración en minutos (por defecto 45)
     - status: estado de la clase (scheduled, completed, cancelled, rescheduled)
-    - type: tipo (regular desde schedule, o recovery manual)
+    - type: tipo (regular desde schedule, recovery manual, o extra sin alumno)
     - format: individual (1 alumno) o group (varios alumnos)
+    - notes: notas opcionales (usado para título en eventos extra)
     """
-    enrollment_id: int = Field(..., gt=0)
+    enrollment_id: int | None = Field(None, gt=0)  # Opcional para type='extra'
     date: date
     time: time
     duration: int = Field(default=45, gt=0, le=240)  # max 4 horas
     status: ClassStatus = ClassStatus.SCHEDULED
     type: ClassType = ClassType.REGULAR
     format: ClassFormat = ClassFormat.INDIVIDUAL
+    notes: str | None = None
     
 
 class ClassCreate(ClassBase):

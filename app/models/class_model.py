@@ -72,9 +72,11 @@ class ClassType(str, enum.Enum):
     
     - REGULAR: Clase normal del horario recurrente
     - RECOVERY: Clase de recuperación (usa crédito del alumno)
+    - EXTRA: Evento extra (ensayo, reunión, clase de prueba, etc.)
     """
     REGULAR = "regular"
     RECOVERY = "recovery"
+    EXTRA = "extra"  # Eventos que no son clases normales
 
 
 class ClassFormat(str, enum.Enum):
@@ -175,11 +177,11 @@ class Class(Base, TimestampMixin):
         comment="ID del horario template que generó esta clase (NULL si es recuperación)"
     )
     
-    enrollment_id: Mapped[int] = mapped_column(
-        ForeignKey("enrollments.id", ondelete="CASCADE"), 
-        nullable=False, 
+    enrollment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("enrollments.id", ondelete="SET NULL"), 
+        nullable=True,  # Nullable para eventos tipo 'extra'
         index=True,
-        comment="ID de la inscripción (redundante pero rápido para queries)"
+        comment="ID de la inscripción (NULL para eventos 'extra')"
     )
     
     teacher_id: Mapped[int] = mapped_column(
@@ -218,7 +220,7 @@ class Class(Base, TimestampMixin):
     # ========================================
     
     status: Mapped[ClassStatus] = mapped_column(
-        SQLEnum(ClassStatus, native_enum=False),
+        SQLEnum(ClassStatus, native_enum=False, values_callable=lambda x: [e.value for e in x]),
         default=ClassStatus.SCHEDULED,
         nullable=False,
         index=True,
@@ -226,7 +228,7 @@ class Class(Base, TimestampMixin):
     )
     
     type: Mapped[ClassType] = mapped_column(
-        SQLEnum(ClassType, native_enum=False),
+        SQLEnum(ClassType, native_enum=False, values_callable=lambda x: [e.value for e in x]),
         default=ClassType.REGULAR,
         nullable=False,
         index=True,
@@ -234,7 +236,7 @@ class Class(Base, TimestampMixin):
     )
     
     format: Mapped[ClassFormat] = mapped_column(
-        SQLEnum(ClassFormat, native_enum=False),
+        SQLEnum(ClassFormat, native_enum=False, values_callable=lambda x: [e.value for e in x]),
         default=ClassFormat.INDIVIDUAL,
         nullable=False,
         comment="Formato: individual (1 alumno) o group (N alumnos)"
@@ -250,6 +252,11 @@ class Class(Base, TimestampMixin):
         nullable=True,
         comment="ID del sistema principal (futuro). NULL si creado localmente"
     )
+    
+    notes: Mapped[str | None] = mapped_column(
+        nullable=True,
+        comment="Notas adicionales (usado para título en eventos 'extra')"
+    )
 
     # ========================================
     # RELACIONES
@@ -260,7 +267,7 @@ class Class(Base, TimestampMixin):
         lazy="selectin"
     )
     
-    enrollment: Mapped["Enrollment"] = relationship(
+    enrollment: Mapped["Enrollment | None"] = relationship(
         back_populates="classes",
         lazy="selectin"
     )

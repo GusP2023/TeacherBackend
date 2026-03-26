@@ -5,13 +5,16 @@ Schedules endpoints - CRUD de horarios recurrentes (templates)
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
+from datetime import date, time as time_module
+from typing import Optional
 
 from app.core.database import get_db
 from app.core.security import get_current_teacher
 from app.crud import schedule, enrollment
 from app.models.teacher import Teacher
 from app.models.class_model import ClassFormat
-from app.schemas.schedule import ScheduleCreate, ScheduleUpdate, ScheduleResponse
+from app.schemas.schedule import ScheduleCreate, ScheduleUpdate, ScheduleResponse, ChangeScheduleRequest, ChangeScheduleResponse, RemoveScheduleRequest, RemoveScheduleResponse
+from app.api.v1.websocket import notify_data_change
 
 router = APIRouter()
 
@@ -117,6 +120,91 @@ async def validate_slot(
     return result
 
 
+# ========================================
+# VERIFICACIÓN DE DISPONIBILIDAD (ANTES DE /{schedule_id} para evitar conflicto de rutas)
+# ========================================
+
+@router.get("/check-availability")
+async def check_availability(
+    day: str = Query(..., description="Día de la semana (monday-sunday)"),
+    time: str = Query(..., description="Hora en formato HH:MM (ej: 16:00)"),
+    from_date: date = Query(..., description="Fecha inicial (YYYY-MM-DD)"),
+    to_date: Optional[date] = Query(None, description="Fecha final (YYYY-MM-DD)"),
+    exclude_enrollment_id: Optional[int] = Query(None, description="Excluir clases de este enrollment (para reactivación)"),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """
+    Verifica disponibilidad de horario en rango de fechas.
+
+    Query params:
+    - day: monday, tuesday, wednesday, thursday, friday, saturday, sunday
+    - time: HH:MM formato 24h (ej: 16:00)
+    - from_date: Fecha inicial (YYYY-MM-DD)
+    - to_date: Fecha final opcional (default: fin de año actual)
+    - exclude_enrollment_id: Opcional, excluye clases de este enrollment (útil para reactivación)
+
+    Returns:
+        {
+            "available": bool,
+            "conflicts": [
+                {
+                    "date": "2025-08-05",
+                    "type": "regular",
+                    "student_id": 5,
+                    "student_name": "Pedro García"
+                }
+            ]
+        }
+    """
+    from app.schemas.suspension import ScheduleAvailabilityResponse, ScheduleConflict
+    from app.crud.schedule import check_schedule_availability_dates
+
+    # Validar day
+    valid_days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    if day.lower() not in valid_days:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Día inválido. Debe ser uno de: {', '.join(valid_days)}"
+        )
+
+    # Validar time formato
+    try:
+        time_obj = time_module.fromisoformat(time)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Formato de hora inválido. Use HH:MM (ej: 16:00)"
+        )
+
+    # Verificar disponibilidad
+    conflicts_data = await check_schedule_availability_dates(
+        db=db,
+        day=day,
+        time_str=time,
+        teacher_id=current_teacher.id,
+        from_date=from_date,
+        to_date=to_date,
+        exclude_enrollment_id=exclude_enrollment_id
+    )
+
+    # Formatear respuesta
+    conflicts = [
+        ScheduleConflict(
+            date=c['date'],
+            type=c['type'],
+            student_id=c['student_id'],
+            student_name=c['student_name']
+        )
+        for c in conflicts_data
+    ]
+
+    return ScheduleAvailabilityResponse(
+        available=len(conflicts) == 0,
+        conflicts=conflicts
+    )
+
+
 @router.post("/", response_model=ScheduleResponse, status_code=status.HTTP_201_CREATED)
 async def create_schedule(
     schedule_data: ScheduleCreate,
@@ -169,6 +257,7 @@ async def create_schedule(
             detail=str(e)
         )
 
+    await notify_data_change(current_teacher.id, "schedule", "create", new_schedule.id)
     return new_schedule
 
 
@@ -306,7 +395,98 @@ async def update_schedule(
             detail=str(e)
         )
 
+    await notify_data_change(current_teacher.id, "schedule", "update", updated_schedule.id)
     return updated_schedule
+
+
+@router.put("/{schedule_id}/remove", response_model=dict)
+async def remove_schedule_with_date(
+    schedule_id: int,
+    data: RemoveScheduleRequest,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """
+    Elimina un horario desde una fecha específica (soft-delete con histórico).
+    
+    Validaciones:
+    - Schedule debe existir y pertenecer al profesor
+    - No puede haber clases con asistencia desde remove_from
+    - No puede haber recuperaciones futuras en ese día/hora
+    
+    Acciones:
+    - Elimina clases regulares scheduled desde remove_from
+    - Marca schedule como inactivo: valid_until=remove_from, active=False
+    - Mantiene histórico del schedule (NO elimina físicamente)
+    
+    Returns:
+        200: Schedule eliminado exitosamente
+        400: Schedule no existe o no pertenece al profesor
+        409: Hay conflictos que impiden la eliminación
+    """
+    from app.crud.schedule import remove_schedule_with_history
+    
+    # Verificar que schedule existe y pertenece al profesor
+    schedule_obj = await schedule.get(db, schedule_id)
+    
+    if not schedule_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Horario no encontrado"
+        )
+    
+    if schedule_obj.teacher_id != current_teacher.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para eliminar este horario"
+        )
+    
+    # Verificar que está activo
+    if not schedule_obj.active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El horario ya no está activo"
+        )
+    
+    # Validar que remove_from es presente o futuro
+    from datetime import date as date_module
+    today = date_module.today()
+    
+    if data.remove_from < today:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La fecha de eliminación no puede ser en el pasado"
+        )
+    
+    # Ejecutar eliminación
+    try:
+        result = await remove_schedule_with_history(
+            db=db,
+            schedule_id=schedule_id,
+            remove_from=data.remove_from
+        )
+        await notify_data_change(current_teacher.id, "schedule", "remove", result["schedule_id"])
+        
+        return {
+            "schedule_id": result["schedule_id"],
+            "classes_deleted": result["classes_deleted"],
+            "valid_until": result["valid_until"].isoformat(),
+            "message": result["message"]
+        }
+    
+    except ValueError as e:
+        # Conflictos de validación → 409
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    
+    except Exception as e:
+        # Error inesperado → 500
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al eliminar horario: {str(e)}"
+        )
 
 
 @router.delete("/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -316,45 +496,104 @@ async def delete_schedule(
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
     """
-    Eliminar un horario (eliminación física)
+    ⚠️ DEPRECADO: No usar este endpoint.
     
-    IMPORTANTE: Esto NO elimina las clases ya generadas
-    Solo evita que se generen nuevas clases en el futuro
-    
-    Args:
-        schedule_id: ID del horario a eliminar
-        db: Sesión de base de datos
-        current_teacher: Profesor autenticado (desde JWT)
-    
-    Returns:
-        204 No Content (sin body)
-    
-    Raises:
-        404: Si el horario no existe
-        403: Si el horario no pertenece al profesor
+    Usar PUT /{schedule_id}/remove con fecha específica para mantener histórico.
     """
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Endpoint deprecado. Usar PUT /{schedule_id}/remove con fecha 'remove_from'"
+    )
+
+
+# ========================================
+# CAMBIO DE HORARIO
+# ========================================
+
+@router.put("/{schedule_id}/change", response_model=ChangeScheduleResponse)
+async def change_schedule_endpoint(
+    schedule_id: int,
+    data: ChangeScheduleRequest,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """
+    Cambia el horario de un alumno de forma atómica.
+
+    Flujo:
+    1. Valida que el schedule existe y pertenece al profesor
+    2. Valida que está activo
+    3. Llama a change_schedule() (transacción atómica)
+
+    Errores:
+    - 404: Schedule no encontrado o no pertenece al profesor
+    - 400: Schedule inactivo, horario igual al actual, o clases con asistencia
+    - 409: Recuperaciones en conflicto con el nuevo horario
+    - 500: Error interno
+    """
+    from app.crud.schedule import change_schedule
+
     # Verificar que existe y pertenece al profesor
     schedule_obj = await schedule.get(db, schedule_id)
-    
+
     if not schedule_obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Horario {schedule_id} no encontrado"
+            detail="Horario no encontrado"
         )
-    
+
     if schedule_obj.teacher_id != current_teacher.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para eliminar este horario"
+            detail="No tienes permiso para modificar este horario"
         )
-    
-    # Eliminar
-    success = await schedule.delete(db, schedule_id)
-    
-    if not success:
+
+    # Verificar que está activo
+    if not schedule_obj.active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El horario ya no está activo"
+        )
+
+    # Ejecutar cambio atómico
+    try:
+        result = await change_schedule(
+            db=db,
+            schedule_id=schedule_id,
+            new_day=data.new_day,
+            new_time=data.new_time,
+            change_from=data.change_from
+        )
+
+        # Notify teacher about schedule change (new schedule created)
+        await notify_data_change(current_teacher.id, "schedule", "change", result["new_schedule_id"])
+
+        return ChangeScheduleResponse(
+            old_schedule_id=result["old_schedule_id"],
+            new_schedule_id=result["new_schedule_id"],
+            classes_deleted=result["classes_deleted"],
+            classes_generated=result["classes_generated"],
+            message="Horario cambiado exitosamente"
+        )
+
+    except ValueError as e:
+        error_msg = str(e)
+
+        # Recuperaciones en conflicto → 409
+        if "recuperaciones" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=error_msg
+            )
+
+        # Resto de errores de validación → 400
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_msg
+        )
+
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error al eliminar el horario"
+            detail=f"Error al cambiar horario: {str(e)}"
         )
-    
-    return None  # 204 No Content

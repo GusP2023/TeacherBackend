@@ -16,6 +16,7 @@ Uso en main.py:
 """
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.admin import router as admin_router
 from app.api.v1.teachers import router as teachers_router
 from app.api.v1.students import router as students_router
 from app.api.v1.instruments import router as instruments_router
@@ -25,9 +26,12 @@ from app.api.v1.classes import router as classes_router
 from app.api.v1.attendances import router as attendances_router
 from app.api.v1.jobs import router as jobs_router
 from app.api.v1.sync import router as sync_router
+from app.api.v1.batch import router as batch_router
+from app.api.v1.websocket import router as websocket_router
 
 __all__ = [
     "auth_router",
+    "admin_router",
     "teachers_router",
     "students_router",
     "instruments_router",
@@ -36,5 +40,7 @@ __all__ = [
     "classes_router",
     "attendances_router",
     "jobs_router",
-    "sync_router"
+    "sync_router",
+    "batch_router",
+    "websocket_router"
 ]

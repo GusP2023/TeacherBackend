@@ -11,9 +11,14 @@ Este módulo centraliza todas las configuraciones:
 Las variables pueden ser sobreescritas con variables de entorno (.env)
 """
 
+from pathlib import Path
 from pydantic import Field, validator
 from typing import List, Optional
 from pydantic_settings import BaseSettings
+
+# Ruta al archivo .env en la raíz del backend
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+ENV_FILE = BASE_DIR / ".env"
 
 
 class Settings(BaseSettings):
@@ -40,7 +45,21 @@ class Settings(BaseSettings):
     # ========================================
     # BASE DE DATOS
     # ========================================
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/music_school"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/music_school"
+
+    @validator("DATABASE_URL", pre=True)
+    def assemble_db_connection(cls, v: Optional[str], values: dict) -> str:
+        if isinstance(v, str):
+            if v.startswith("postgresql://"):
+                v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+            
+            # Fix SSL for Render (requires SSL)
+            if "render.com" in v and "ssl=" not in v:
+                if "?" in v:
+                    v += "&ssl=require"
+                else:
+                    v += "?ssl=require"
+        return v
     
     # ========================================
     # SEGURIDAD Y AUTENTICACIÓN
@@ -101,9 +120,12 @@ class Settings(BaseSettings):
     # ========================================
     class Config:
         """Configuración de Pydantic"""
-        env_file = ".env"
+        env_file = str(ENV_FILE)
         case_sensitive = True
 
 
 # Instancia global de configuración
 settings = Settings()
+
+# Debug: imprimir DATABASE_URL para verificar
+print(f"[CONFIG] DATABASE_URL: {settings.DATABASE_URL}")

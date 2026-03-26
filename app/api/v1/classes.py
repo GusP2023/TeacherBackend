@@ -11,6 +11,7 @@ from app.core.security import get_current_teacher
 from app.crud import class_crud, enrollment
 from app.models.teacher import Teacher
 from app.schemas.class_schema import ClassCreate, ClassUpdate, ClassResponse
+from app.api.v1.websocket import notify_data_change
 
 router = APIRouter()
 
@@ -88,11 +89,12 @@ async def create_class(
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
     """
-    Crear una clase nueva (genérica - NO usar para recuperaciones)
+    Crear una clase nueva
     
-    Para crear recuperaciones usar POST /classes/recovery
+    - type='regular' o 'recovery' → requiere enrollment_id válido
+    - type='extra' → enrollment_id es opcional (evento sin alumno)
     
-    Valida que el enrollment exista y pertenezca al profesor
+    Para crear recuperaciones con descuento de créditos, usar POST /classes/recovery
     
     Args:
         class_data: Datos de la clase a crear
@@ -103,28 +105,37 @@ async def create_class(
         Clase creada con id asignado
     
     Raises:
-        400: Si el enrollment no existe o no pertenece al profesor
+        400: Si el enrollment no existe, no pertenece al profesor,
+             o falta enrollment_id para type regular/recovery
     """
-    # Validar que el enrollment existe y pertenece al profesor
-    enrollment_obj = await enrollment.get(db, class_data.enrollment_id)
-    
-    if not enrollment_obj:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Inscripción {class_data.enrollment_id} no encontrada"
-        )
-    
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para crear clases en esta inscripción"
-        )
-    
     # Asignar el teacher_id del profesor logueado
     class_data.teacher_id = current_teacher.id
     
-    # Crear la clase
-    new_class = await class_crud.create(db, class_data)
+    # Validar enrollment_id si está presente
+    if class_data.enrollment_id is not None:
+        enrollment_obj = await enrollment.get(db, class_data.enrollment_id)
+        
+        if not enrollment_obj:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Inscripción {class_data.enrollment_id} no encontrada"
+            )
+        
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para crear clases en esta inscripción"
+            )
+    
+    # Crear la clase (el CRUD valida que enrollment_id sea obligatorio para regular/recovery)
+    try:
+        new_class = await class_crud.create(db, class_data)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    await notify_data_change(current_teacher.id, "class", "create", new_class.id)
     
     return new_class
 
@@ -180,6 +191,7 @@ async def create_recovery_class(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+    await notify_data_change(current_teacher.id, "class", "create", new_recovery.id)
     
     return new_recovery
 
@@ -274,6 +286,7 @@ async def update_class(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+    await notify_data_change(current_teacher.id, "class", "update", updated_class.id)
     
     return updated_class
 
@@ -320,6 +333,7 @@ async def cancel_class(
     
     # Cancelar
     cancelled_class = await class_crud.cancel(db, class_id)
+    await notify_data_change(current_teacher.id, "class", "cancel", cancelled_class.id)
     
     return cancelled_class
 
@@ -373,5 +387,6 @@ async def delete_recovery_class(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+    await notify_data_change(current_teacher.id, "class", "delete", class_id)
     
     return None  # 204 No Content

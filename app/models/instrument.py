@@ -85,7 +85,7 @@ class Instrument(Base, TimestampMixin):
     
     enrollments: Mapped[List["Enrollment"]] = relationship(
         back_populates="instrument",
-        lazy="selectin"  # Optimizado para FastAPI async
+        lazy="noload"  # No cargar enrollments al pedir instrumentos
     )
 
     def __repr__(self) -> str:

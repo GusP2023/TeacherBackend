@@ -9,20 +9,42 @@ Endpoints para ejecutar manualmente los jobs del sistema:
 """
 
 from datetime import date as date_type
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.logging import log_event, Actions
 from app.core.security import get_current_teacher
 from app.models.teacher import Teacher
 from app.jobs.class_generator import (
     generate_classes_for_enrollment,
     generate_monthly_classes,
     delete_future_classes_for_schedule,
-    cancel_future_classes_for_enrollment
+    cancel_future_classes_for_enrollment,
+    regenerate_classes_manual
 )
 
 router = APIRouter()
+
+
+# ============================================
+# MODELOS DE REQUEST/RESPONSE
+# ============================================
+
+class RegenerateClassesRequest(BaseModel):
+    """Request para regenerar clases manualmente"""
+    from_date: str  # Formato: YYYY-MM-DD
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "from_date": "2026-02-15"
+            }
+        }
+
+
+
 
 
 # ============================================
@@ -102,6 +124,98 @@ async def generate_for_specific_enrollment(
         "skipped": result["skipped"],
         "errors": result.get("errors", [])
     }
+
+
+# ============================================
+# REGENERACIÓN MANUAL DE CLASES (FRONTEND)
+# ============================================
+
+@router.post("/regenerate-classes")
+async def regenerate_classes_endpoint(
+    http_request: Request,
+    request: RegenerateClassesRequest,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """
+    Regenera clases manualmente desde una fecha específica hacia 3 meses exactos.
+    
+    (RESET TOTAL - elimina TODAS las clases futuras scheduled >= from_date)
+    
+    VALIDACIONES DE SEGURIDAD:
+    ✅ Elimina TODAS las clases futuras scheduled (pierde asistencias futuras)
+    ✅ No toca recuperaciones (type='recovery')
+    ✅ Solo procesa enrollments activos
+    ✅ Respeta vigencia de schedules
+    ✅ Transacción segura (rollback si hay error)
+    
+    FLUJO:
+    - Usuario selecciona fecha inicio (ej: 2026-03-01)
+    - Se eliminan TODAS las clases scheduled >= from_date
+    - Se generan clases nuevas exactamente 3 meses: 1-mar → 1-jun
+    - Solo se crean clases según schedules activos
+    
+    Args:
+        request: Body contiene from_date en formato YYYY-MM-DD
+    
+    Returns:
+        {
+            "success": bool,
+            "message": str,
+            "stats": {
+                "enrollments_processed": int,
+                "classes_deleted": int,
+                "classes_created": int,
+                "skipped": int,
+                "errors": [str]
+            },
+            "validation_warnings": [str]
+        }
+    
+    Raises:
+        400: Formato de fecha inválido
+        
+    Example:
+        POST /api/v1/jobs/regenerate-classes
+        Body: { "from_date": "2026-03-01" }
+    """
+    # Validar formato de fecha
+    try:
+        from_date_obj = date_type.fromisoformat(request.from_date)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Formato de fecha inválido: {request.from_date}. Use YYYY-MM-DD"
+        )
+
+    # Ejecutar regeneración con manejo adicional de errores
+    try:
+        result = await regenerate_classes_manual(db, from_date_obj, current_teacher.id)
+    except Exception as exc:
+        import traceback
+        tb = traceback.format_exc()
+        # registrar en logs de servidor
+        print("[jobs] excepción no capturada en regenerate_classes_manual:\n", tb)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # Loguear el reset total (exitoso o fallido) — es la operación más destructiva
+    stats = result.get("stats", {})
+    await log_event(
+        db, http_request,
+        action=Actions.RESET_TOTAL,
+        teacher_id=current_teacher.id,
+        success=result.get("success", False),
+        detail=(
+            f"from_date={request.from_date} | "
+            f"deleted={stats.get('classes_deleted', 0)} | "
+            f"created={stats.get('classes_created', 0)}"
+        ),
+    )
+
+    if not result.get("success", False):
+        print(f"[jobs] regeneración manual fallida: {result.get('message')}")
+
+    return result
 
 
 # ============================================

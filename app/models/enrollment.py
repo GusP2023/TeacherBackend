@@ -31,7 +31,7 @@ Estados posibles:
 """
 
 from datetime import date
-from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, UniqueConstraint
+from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, UniqueConstraint, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List, TYPE_CHECKING
 import enum
@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from .instrument import Instrument
     from .schedule import Schedule
     from .class_model import Class
+    from .suspension_history import SuspensionHistory
 
 
 class EnrollmentStatus(str, enum.Enum):
@@ -168,7 +169,7 @@ class Enrollment(Base, TimestampMixin):
     )
     
     status: Mapped[EnrollmentStatus] = mapped_column(
-        SQLEnum(EnrollmentStatus, native_enum=False),
+        SQLEnum(EnrollmentStatus, native_enum=False, values_callable=lambda x: [e.value for e in x]),
         default=EnrollmentStatus.ACTIVE,
         nullable=False,
         index=True,
@@ -176,7 +177,7 @@ class Enrollment(Base, TimestampMixin):
     )
     
     level: Mapped[EnrollmentLevel | None] = mapped_column(
-        SQLEnum(EnrollmentLevel, native_enum=False),
+        SQLEnum(EnrollmentLevel, native_enum=False, values_callable=lambda x: [e.value for e in x]),
         nullable=True,
         comment="Nivel de aprendizaje del alumno en este instrumento"
     )
@@ -197,6 +198,18 @@ class Enrollment(Base, TimestampMixin):
         comment="Fecha hasta cuándo está suspendido (NULL si no aplica)"
     )
     
+    suspended_at: Mapped[date | None] = mapped_column(
+        Date, 
+        nullable=True,
+        comment="Fecha en que se suspendió (NULL si nunca fue suspendido)"
+    )
+    
+    suspended_reason: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Motivo de la suspensión (opcional)"
+    )
+    
     withdrawn_date: Mapped[date | None] = mapped_column(
         Date, 
         nullable=True,
@@ -212,6 +225,14 @@ class Enrollment(Base, TimestampMixin):
         default=0,
         nullable=False,
         comment="Créditos de recuperación disponibles (no puede ser negativo)"
+    )
+    
+    manual_credit_dates: Mapped[List[str]] = mapped_column(
+        ARRAY(String),
+        default=list,
+        nullable=False,
+        server_default='{}',
+        comment="Array de fechas (YYYY-MM-DD) de créditos agregados manualmente"
     )
 
     # ========================================
@@ -262,6 +283,12 @@ class Enrollment(Base, TimestampMixin):
     )
     
     classes: Mapped[List["Class"]] = relationship(
+        back_populates="enrollment",
+        cascade="all, delete-orphan",
+        lazy="selectin"
+    )
+
+    suspension_history: Mapped[List["SuspensionHistory"]] = relationship(
         back_populates="enrollment",
         cascade="all, delete-orphan",
         lazy="selectin"

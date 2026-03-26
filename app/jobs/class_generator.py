@@ -5,7 +5,9 @@ Este módulo contiene la lógica principal para generar clases automáticamente
 desde los horarios (Schedules) de los alumnos.
 
 REGLAS DE NEGOCIO:
-1. Generar clases 2 meses adelante desde la inscripción
+1. Generar clases desde HOY (o valid_from si es futuro) hasta fin del mes actual + 2 meses completos
+   - Ejemplo: Hoy 19 dic → hasta 28 feb (dic + ene + feb)
+   - Ejemplo: valid_from 10 ene → hasta 31 mar (ene + feb + mar)
 2. Job mensual ejecuta día 10 de cada mes a las 2 AM
 3. Saltar clases duplicadas (misma fecha/hora/enrollment)
 4. NO generar en feriados
@@ -15,19 +17,22 @@ REGLAS DE NEGOCIO:
 8. Formato heredado desde Enrollment.format
 
 FUNCIONES PRINCIPALES:
-- generate_classes_for_enrollment(): Generar 2 meses para un enrollment (onboarding)
+- generate_classes_for_enrollment(): Generar clases para un enrollment
 - generate_monthly_classes(): Job mensual automático
 - delete_future_classes_for_schedule(): Eliminar clases al cambiar horario
 """
 
 from datetime import date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, update, delete
+from sqlalchemy.exc import MultipleResultsFound
 
 from app.models.schedule import Schedule, DayOfWeek
 from app.models.class_model import Class, ClassStatus, ClassType
 from app.models.enrollment import Enrollment, EnrollmentStatus
+from app.models.attendance import Attendance
 from app.core.holidays import is_holiday
+from sqlalchemy import exists
 
 
 # ============================================
@@ -46,38 +51,72 @@ DAY_MAP = {
 
 
 # ============================================
+# UTILIDADES DE FECHA
+# ============================================
+
+def get_last_day_of_month(year: int, month: int) -> date:
+    """Obtiene el último día de un mes dado."""
+    if month == 12:
+        return date(year + 1, 1, 1) - timedelta(days=1)
+    return date(year, month + 1, 1) - timedelta(days=1)
+
+
+def add_months(d: date, months: int) -> date:
+    """Añade N meses a una fecha, retornando la fecha exacta + N meses (mismo día si posible, último del mes si no)."""
+    new_month = d.month + months
+    new_year = d.year + (new_month - 1) // 12
+    new_month = ((new_month - 1) % 12) + 1
+    try:
+        return date(new_year, new_month, d.day)
+    except ValueError:
+        # Día no existe en el mes nuevo, usar último día del mes
+        if new_month == 2:
+            return date(new_year, 2, 28 if not (new_year % 4 == 0 and (new_year % 100 != 0 or new_year % 400 == 0)) else 29)
+        elif new_month in [4, 6, 9, 11]:
+            return date(new_year, new_month, 30)
+        else:
+            return date(new_year, new_month, 31)
+
+
+# ============================================
 # GENERACIÓN PARA UN ENROLLMENT (ONBOARDING)
 # ============================================
 
 async def generate_classes_for_enrollment(
     db: AsyncSession,
     enrollment_id: int,
-    months_ahead: int = 2
+    months_ahead: int = 2,
+    from_date: date = None
 ) -> dict:
     """
-    Genera clases para una inscripción específica
+    Genera clases para una inscripción específica.
 
-    Usado principalmente en el onboarding cuando se inscribe un alumno.
-    Genera clases para los próximos N meses desde valid_from del Schedule.
+    Genera clases desde `from_date` (o hoy si no se especifica) hasta el final
+    del mes actual + `months_ahead` meses completos.
+
+    Ejemplos (con months_ahead=2):
+    - from_date = 19 dic 2025 → genera hasta 28 feb 2026 (dic + ene + feb)
+    - from_date = 10 ene 2026 → genera hasta 31 mar 2026 (ene + feb + mar)
 
     Args:
         db: Sesión de base de datos
         enrollment_id: ID de la inscripción
-        months_ahead: Cuántos meses generar (default: 2)
+        months_ahead: Cuántos meses completos adicionales generar (default: 2)
+        from_date: Fecha desde la cual generar (default: hoy)
 
     Returns:
         dict: Estadísticas de generación
             {
                 "created": 16,
                 "skipped": 2,
-                "errors": []
+                "errors": [],
+                "date_range": {"start": "2025-12-19", "end": "2026-02-28"}
             }
-
-    Example:
-        >>> # Al inscribir alumno en onboarding
-        >>> result = await generate_classes_for_enrollment(db, enrollment_id=1, months_ahead=2)
-        >>> print(f"Clases generadas: {result['created']}")
     """
+    # Fecha de inicio por defecto: hoy
+    if from_date is None:
+        from_date = date.today()
+
     # Obtener enrollment y validar
     enrollment = await db.get(Enrollment, enrollment_id)
 
@@ -111,16 +150,20 @@ async def generate_classes_for_enrollment(
             "errors": []
         }
 
-    stats = {"created": 0, "skipped": 0, "errors": []}
+    stats = {"created": 0, "skipped": 0, "errors": [], "schedules_processed": 0}
 
     # Para cada Schedule, generar clases
     for schedule in schedules:
         result = await _generate_classes_for_schedule(
-            db, schedule, enrollment, months_ahead
+            db, schedule, enrollment, months_ahead, from_date
         )
         stats["created"] += result["created"]
         stats["skipped"] += result["skipped"]
         stats["errors"].extend(result["errors"])
+        stats["schedules_processed"] += 1
+        
+        if "date_range" not in stats and "date_range" in result:
+            stats["date_range"] = result["date_range"]
 
     await db.commit()
     return stats
@@ -134,73 +177,51 @@ async def _generate_classes_for_schedule(
     db: AsyncSession,
     schedule: Schedule,
     enrollment: Enrollment,
-    months_ahead: int
+    months_ahead: int,
+    from_date: date
 ) -> dict:
     """
-    Genera clases para un horario específico (función interna)
+    Genera clases para un horario específico (función interna).
 
     Args:
         db: Sesión de base de datos
         schedule: Horario desde el cual generar
         enrollment: Inscripción asociada
-        months_ahead: Cuántos meses COMPLETOS generar después del mes de inscripción
+        months_ahead: Cuántos meses completos adicionales generar
+        from_date: Fecha base desde la cual calcular
 
     Returns:
-        dict: Estadísticas {created, skipped, errors}
+        dict: Estadísticas {created, skipped, errors, date_range}
     """
     stats = {"created": 0, "skipped": 0, "errors": []}
 
-    # Calcular rango de fechas
-    start_date = schedule.valid_from
+    # BUG FIX: Respetar valid_from del schedule.
+    # Si el alumno se inscribió DESPUÉS de from_date, no generar clases
+    # anteriores a su inscripción.
+    start_date = max(from_date, schedule.valid_from)
 
-    # Calcular fecha final:
-    # - Mes de inscripción: desde valid_from hasta fin de ese mes
-    # - months_ahead meses completos adicionales
-    #
-    # Ejemplo: valid_from = 2025-09-22, months_ahead = 1
-    # - Generar desde 22-sept hasta 30-sept (resto del mes de inscripción)
-    # - Generar todo octubre (1-oct hasta 31-oct)
-    # - end_date = 31-oct-2025
+    # Fecha final: último día del mes actual + months_ahead meses completos
+    # Ejemplo: start_date = 19 dic, months_ahead = 2 → end_date = 28 feb
+    end_date = add_months(start_date, months_ahead)
 
-    # Calcular último día del mes actual de inscripción
-    if start_date.month == 12:
-        next_month_start = date(start_date.year + 1, 1, 1)
-    else:
-        next_month_start = date(start_date.year, start_date.month + 1, 1)
-
-    current_month_end = next_month_start - timedelta(days=1)
-
-    # Agregar months_ahead meses completos
-    target_month = start_date.month + months_ahead
-    target_year = start_date.year
-
-    # Ajustar si pasamos de diciembre
-    while target_month > 12:
-        target_month -= 12
-        target_year += 1
-
-    # Calcular último día del mes objetivo
-    if target_month == 12:
-        next_month_start = date(target_year + 1, 1, 1)
-    else:
-        next_month_start = date(target_year, target_month + 1, 1)
-
-    end_date = next_month_start - timedelta(days=1)
-
-    # Si hay valid_until, usar el menor
+    # Si hay valid_until en el schedule, usar el menor
     if schedule.valid_until:
         end_date = min(end_date, schedule.valid_until)
+
+    stats["date_range"] = {"start": str(start_date), "end": str(end_date)}
 
     # Obtener día de la semana objetivo (0=Lunes, 6=Domingo)
     target_weekday = DAY_MAP[schedule.day]
 
     # Encontrar el primer día que coincida con el día de la semana del Schedule
     current_date = start_date
+    days_searched = 0
     while current_date.weekday() != target_weekday:
         current_date += timedelta(days=1)
-
+        days_searched += 1
+        
         # Protección: si no encontramos el día en 7 días, hay un error
-        if current_date > start_date + timedelta(days=7):
+        if days_searched > 7:
             stats["errors"].append(
                 f"No se pudo encontrar {schedule.day} desde {start_date}"
             )
@@ -214,19 +235,20 @@ async def _generate_classes_for_schedule(
             current_date += timedelta(weeks=1)
             continue
 
-        # Verificar si ya existe clase idéntica
+        # Verificar si ya existe clase idéntica. Limitamos a 1 fila para evitar
+        # excepciones si por alguna razón hay más de una clase duplicada en la BD.
         result = await db.execute(
-            select(Class).where(
+            select(Class.id).where(
                 and_(
                     Class.schedule_id == schedule.id,
                     Class.date == current_date,
                     Class.time == schedule.time
                 )
-            )
+            ).limit(1)
         )
 
-        if result.scalar_one_or_none():
-            # Ya existe, saltar
+        if result.scalar_one_or_none() is not None:
+            # Ya existe al menos una, saltar
             stats["skipped"] += 1
             current_date += timedelta(weeks=1)
             continue
@@ -242,7 +264,7 @@ async def _generate_classes_for_schedule(
                 duration=schedule.duration,
                 status=ClassStatus.SCHEDULED,
                 type=ClassType.REGULAR,
-                format=enrollment.format  # ⬅️ Heredado desde Enrollment
+                format=enrollment.format
             )
 
             db.add(new_class)
@@ -265,27 +287,16 @@ async def _generate_classes_for_schedule(
 
 async def generate_monthly_classes(db: AsyncSession) -> dict:
     """
-    Job mensual: Genera clases del próximo mes para todos los enrollments activos
+    Job mensual: Genera clases para todos los enrollments activos.
 
     Ejecuta automáticamente día 10 de cada mes a las 2:00 AM.
-    Genera clases solo del próximo mes (no 2 meses completos).
+    Genera clases desde hoy hasta fin del mes actual + 2 meses.
 
     Args:
         db: Sesión de base de datos
 
     Returns:
         dict: Estadísticas de generación
-            {
-                "created": 120,
-                "skipped": 30,
-                "enrollments_processed": 15,
-                "errors": []
-            }
-
-    Example:
-        >>> # Ejecutado automáticamente por APScheduler
-        >>> result = await generate_monthly_classes(db)
-        >>> print(f"Total clases generadas: {result['created']}")
     """
     # Obtener todos los enrollments activos
     result = await db.execute(
@@ -306,7 +317,8 @@ async def generate_monthly_classes(db: AsyncSession) -> dict:
         result = await generate_classes_for_enrollment(
             db,
             enrollment.id,
-            months_ahead=1  # Solo próximo mes en job mensual
+            months_ahead=2,  # Mes actual + 2 meses completos
+            from_date=date.today()
         )
 
         if "error" not in result:
@@ -324,6 +336,175 @@ async def generate_monthly_classes(db: AsyncSession) -> dict:
 
 
 # ============================================
+# REGENERAR CLASES MANUALMENTE (FRONTEND)
+# ============================================
+
+async def regenerate_classes_manual(
+    db: AsyncSession,
+    from_date: date,
+    teacher_id: int
+) -> dict:
+    """
+    Regenera clases manualmente desde una fecha específica hacia 3 meses exactos.
+    
+    VALIDACIONES DE SEGURIDAD (RESET TOTAL):
+    1. Elimina TODAS las clases futuras scheduled >= from_date (pierde asistencias futuras)
+    2. No toca recuperaciones (solo 'regular' y 'extra')
+    3. Solo genera para enrollments ACTIVOS (no suspendidos/retirados)
+    4. Respeta vigencia de schedules (valid_from/valid_until)
+    5. Transacción TODO-o-NADA (rollback si hay error)
+    6. Requiere conexión a backend (backend debe estar activo)
+    
+    RANGO DE FECHAS:
+    - Permite seleccionar hasta 1 mes atrás desde hoy
+    - Genera exactamente 3 meses desde la fecha seleccionada
+    - Ejemplo: Si seleccionas 1-mar, genera hasta 1-jun
+    
+    FLUJO:
+    - Usuario selecciona fecha inicio (puede ser 1 mes atrás o más adelante)
+    - Se eliminan TODAS las clases scheduled >= from_date (reset total)
+    - Se generan clases nuevas según schedules activos desde from_date
+    
+    Args:
+        db: Sesión de base de datos (requiere backend activo)
+        from_date: Fecha inicial para regeneración (YYYY-MM-DD)
+        teacher_id: ID del profesor (para filtrar sus enrollments)
+    
+    Returns:
+        dict: Estadísticas con validaciones y resultados
+        {
+            "success": bool,
+            "message": str,
+            "stats": {
+                "enrollments_processed": int,
+                "classes_deleted": int,
+                "classes_created": int,
+                "skipped": int,
+                "errors": [str]
+            },
+            "validation_warnings": [str]
+        }
+    """
+    stats = {
+        "enrollments_processed": 0,
+        "classes_deleted": 0,
+        "classes_created": 0,
+        "skipped": 0,
+        "errors": []
+    }
+    warnings = []
+    
+    try:
+        # ====== VALIDACIÓN 1: Verificar fecha ======
+        today = date.today()
+        min_date = today - timedelta(days=30)  # Permite hasta 1 mes atrás
+        
+        if from_date < min_date:
+            return {
+                "success": False,
+                "message": f"La fecha no puede ser anterior a {min_date}",
+                "stats": stats,
+                "validation_warnings": []
+            }
+        
+        # ====== CALCULAR RANGO: exactamente 3 meses ======
+        end_date = add_months(from_date, 3)
+        
+        # ====== OBTENER ENROLLMENTS DEL PROFESOR (SOLO ACTIVOS) ======
+        result = await db.execute(
+            select(Enrollment).where(
+                and_(
+                    Enrollment.teacher_id == teacher_id,
+                    Enrollment.status == EnrollmentStatus.ACTIVE
+                )
+            )
+        )
+        enrollments = result.scalars().all()
+        
+        if not enrollments:
+            return {
+                "success": False,
+                "message": "No hay inscripciones activas para este profesor",
+                "stats": stats,
+                "validation_warnings": []
+            }
+        
+        # ====== PROCESAR CADA ENROLLMENT ======
+        for enrollment in enrollments:
+            # ====== FASE 1: ELIMINAR CLASES FUTURAS SIN ASISTENCIA (RESET SEGURO) ======
+            # BUG FIX: Solo eliminar clases que NO tienen asistencia registrada.
+            # Las clases con asistencia ya marcada se preservan y luego son
+            # saltadas como duplicados en la regeneración.
+            classes_with_attendance_subq = (
+                select(Attendance.class_id).where(
+                    Attendance.class_id == Class.id
+                ).correlate(Class).exists()
+            )
+
+            result = await db.execute(
+                delete(Class).where(
+                    and_(
+                        Class.enrollment_id == enrollment.id,
+                        Class.date >= from_date,
+                        Class.date <= end_date,
+                        Class.status == ClassStatus.SCHEDULED,
+                        Class.type != ClassType.RECOVERY,  # NO tocar recuperaciones
+                        ~classes_with_attendance_subq       # NO tocar clases con asistencia
+                    )
+                )
+            )
+            stats["classes_deleted"] += result.rowcount
+            
+            # ====== FASE 2: GENERAR NUEVAS CLASES ======
+            result = await generate_classes_for_enrollment(
+                db,
+                enrollment.id,
+                months_ahead=3,  # Exactamente 3 meses
+                from_date=from_date
+            )
+            
+            if "error" not in result:
+                stats["classes_created"] += result["created"]
+                stats["skipped"] += result["skipped"]
+                stats["errors"].extend(result.get("errors", []))
+                stats["enrollments_processed"] += 1
+            else:
+                warnings.append(
+                    f"Enrollment {enrollment.id}: {result['error']}"
+                )
+        
+        await db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Regeneración completada: {stats['classes_created']} clases creadas, {stats['classes_deleted']} eliminadas",
+            "stats": stats,
+            "validation_warnings": warnings
+        }
+        
+    except MultipleResultsFound as mr:
+        await db.rollback()
+        # error específico para filas múltiples
+        stats["errors"].append(f"MultipleResultsFound: {mr}")
+        return {
+            "success": False,
+            "message": f"Error en regeneración (filas múltiples): {mr}",
+            "stats": stats,
+            "validation_warnings": warnings
+        }
+    except Exception as e:
+        await db.rollback()
+        import traceback
+        tb = traceback.format_exc()
+        stats["errors"].append(f"Error crítico: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Error en regeneración: {str(e)}\n{tb}",
+            "stats": stats,
+            "validation_warnings": warnings
+        }
+
+# ============================================
 # ELIMINAR CLASES FUTURAS (CAMBIO DE HORARIO)
 # ============================================
 
@@ -333,7 +514,7 @@ async def delete_future_classes_for_schedule(
     from_date: date
 ) -> int:
     """
-    ELIMINA (físicamente) todas las clases futuras de un horario desde una fecha
+    ELIMINA (físicamente) todas las clases futuras de un horario desde una fecha.
 
     Usado al cambiar de horario. Las clases se eliminan de la BD, NO se cancelan.
 
@@ -346,36 +527,18 @@ async def delete_future_classes_for_schedule(
 
     Returns:
         int: Cantidad de clases eliminadas
-
-    Example:
-        >>> # Al cambiar horario de un alumno
-        >>> deleted = await delete_future_classes_for_schedule(
-        ...     db,
-        ...     schedule_id=1,
-        ...     from_date=date(2025, 11, 1)
-        ... )
-        >>> print(f"Clases eliminadas: {deleted}")
     """
-    # Obtener clases futuras del Schedule (solo SCHEDULED, no completed)
     result = await db.execute(
-        select(Class).where(
+        delete(Class).where(
             and_(
                 Class.schedule_id == schedule_id,
                 Class.date >= from_date,
-                Class.status == ClassStatus.SCHEDULED  # Solo eliminar las no completadas
+                Class.status == ClassStatus.SCHEDULED
             )
         )
     )
-    classes = result.scalars().all()
-
-    # ELIMINAR físicamente cada una
-    count = 0
-    for cls in classes:
-        await db.delete(cls)
-        count += 1
-
     await db.commit()
-    return count
+    return result.rowcount
 
 
 # ============================================
@@ -388,10 +551,12 @@ async def cancel_future_classes_for_enrollment(
     from_date: date
 ) -> int:
     """
-    CANCELA todas las clases futuras de una inscripción desde una fecha
+    CANCELA clases futuras de una inscripción desde una fecha.
 
-    Usado cuando un enrollment se suspende o retira.
-    Las clases se CANCELAN (status='cancelled'), NO se eliminan.
+    Usado al suspender o retirar un alumno. Las clases se CANCELAN (status='cancelled'),
+    NO se eliminan. Se mantienen en la BD para histórico.
+
+    IMPORTANTE: Solo cancela clases con status='scheduled' (no las completadas).
 
     Args:
         db: Sesión de base de datos
@@ -400,33 +565,16 @@ async def cancel_future_classes_for_enrollment(
 
     Returns:
         int: Cantidad de clases canceladas
-
-    Example:
-        >>> # Al retirar un alumno
-        >>> cancelled = await cancel_future_classes_for_enrollment(
-        ...     db,
-        ...     enrollment_id=1,
-        ...     from_date=date(2025, 11, 1)
-        ... )
-        >>> print(f"Clases canceladas: {cancelled}")
     """
-    # Obtener clases futuras del enrollment (solo SCHEDULED)
+    # Actualizar status a 'cancelled' para clases futuras scheduled
     result = await db.execute(
-        select(Class).where(
+        update(Class).where(
             and_(
                 Class.enrollment_id == enrollment_id,
                 Class.date >= from_date,
                 Class.status == ClassStatus.SCHEDULED
             )
-        )
+        ).values(status=ClassStatus.CANCELLED)
     )
-    classes = result.scalars().all()
-
-    # CANCELAR cada una (cambiar status)
-    count = 0
-    for cls in classes:
-        cls.status = ClassStatus.CANCELLED
-        count += 1
-
     await db.commit()
-    return count
+    return result.rowcount

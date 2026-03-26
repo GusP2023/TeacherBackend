@@ -10,11 +10,13 @@ Contiene los trabajos automatizados del sistema:
 from .class_generator import (
     generate_classes_for_enrollment,
     generate_monthly_classes,
-    delete_future_classes_for_schedule
+    delete_future_classes_for_schedule,
+    regenerate_classes_manual
 )
 
 __all__ = [
     "generate_classes_for_enrollment",
     "generate_monthly_classes",
     "delete_future_classes_for_schedule",
+    "regenerate_classes_manual",
 ]

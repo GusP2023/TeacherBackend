@@ -119,7 +119,31 @@ async def update(
     return student
 
 
-async def delete(db: AsyncSession, student_id: int) -> bool:
+async def remove(db: AsyncSession, student_id: int) -> bool:
+    """
+    Eliminar un alumno físicamente de la base de datos.
+
+    Esto activará la eliminación en cascada de inscripciones y horarios.
+    
+    Args:
+        db: Sesión de base de datos
+        student_id: ID del alumno a eliminar
+    
+    Returns:
+        True si se eliminó, False si no se encontró
+    """
+    result = await db.execute(select(Student).where(Student.id == student_id))
+    student = result.scalar_one_or_none()
+    
+    if not student:
+        return False
+        
+    await db.delete(student)
+    await db.commit()
+    
+    return True
+
+async def soft_delete(db: AsyncSession, student_id: int) -> bool:
     """
     Eliminar un alumno (soft-delete)
     

@@ -40,10 +40,12 @@ class AttendanceStatus(str, enum.Enum):
     - PRESENT: Asistió a la clase → SE COBRA
     - ABSENT: Faltó sin justificación → SE COBRA
     - LICENSE: Licencia justificada → NO SE COBRA, +1 CRÉDITO
+    - EXCUSED: Sinónimo de license (compatibilidad con frontend)
     """
     PRESENT = "present"
     ABSENT = "absent"
     LICENSE = "license"
+    EXCUSED = "excused"  # Alias para license
 
 
 class Attendance(Base, TimestampMixin):
@@ -119,7 +121,7 @@ class Attendance(Base, TimestampMixin):
     )
     
     status: Mapped[AttendanceStatus] = mapped_column(
-        SQLEnum(AttendanceStatus, native_enum=False),
+        SQLEnum(AttendanceStatus, native_enum=False, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         index=True,
         comment="Estado: present (asistió), absent (faltó), license (licencia)"

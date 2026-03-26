@@ -10,6 +10,7 @@ from app.core.security import get_current_teacher
 from app.crud import student
 from app.models.teacher import Teacher
 from app.schemas.student import StudentCreate, StudentUpdate, StudentResponse
+from app.api.v1.websocket import notify_data_change
 
 router = APIRouter()
 
@@ -69,6 +70,7 @@ async def create_student(
     student_data.teacher_id = current_teacher.id
     
     new_student = await student.create(db, student_data)
+    await notify_data_change(current_teacher.id, "student", "create", new_student.id)
     
     return new_student
 
@@ -154,6 +156,7 @@ async def update_student(
     
     # Actualizar
     updated_student = await student.update(db, student_id, student_data)
+    await notify_data_change(current_teacher.id, "student", "update", updated_student.id)
     
     return updated_student
 
@@ -165,10 +168,10 @@ async def delete_student(
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
     """
-    Eliminar un alumno (soft-delete)
+    Eliminar un alumno FÍSICAMENTE (hard-delete)
     
-    NO elimina físicamente, solo marca active=False
-    Mantiene histórico de clases y asistencias
+    Esto dispara la eliminación en cascada en la base de datos
+    para inscripciones y horarios asociados.
     
     Args:
         student_id: ID del alumno a eliminar
@@ -198,13 +201,15 @@ async def delete_student(
             detail="No tienes permiso para eliminar este alumno"
         )
     
-    # Soft-delete
-    success = await student.delete(db, student_id)
+    # Hard-delete
+    success = await student.remove(db, student_id)
     
     if not success:
+        # Esto no debería ocurrir si la validación anterior pasó
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error al eliminar el alumno"
         )
     
+    await notify_data_change(current_teacher.id, "student", "delete", student_id)
     return None  # 204 No Content

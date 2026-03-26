@@ -24,6 +24,8 @@ Para crear las tablas:
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
@@ -36,6 +38,7 @@ from app.core.security import should_refresh_token, refresh_access_token
 # ========================================
 from app.api.v1 import (
     auth_router,
+    admin_router,
     teachers_router,
     students_router,
     instruments_router,
@@ -44,7 +47,9 @@ from app.api.v1 import (
     classes_router,
     attendances_router,
     jobs_router,
-    sync_router
+    sync_router,
+    batch_router,
+    websocket_router
 )
 
 # ========================================
@@ -54,6 +59,9 @@ from app.api.v1 import (
 # para crear las tablas correctamente
 from app.models import (
     Base,
+    Organization,
+    Invitation,
+    SecurityLog,
     Teacher,
     Student,
     Instrument,
@@ -123,12 +131,29 @@ class TokenRefreshMiddleware(BaseHTTPMiddleware):
 # ========================================
 # CREAR APLICACIÓN FASTAPI
 # ========================================
+# Swagger UI deshabilitado en producción (expone todos los endpoints públicamente)
+_docs_url  = "/docs"  if settings.ENVIRONMENT != "production" else None
+_redoc_url = "/redoc" if settings.ENVIRONMENT != "production" else None
+
+# Instancia global del rate limiter importada desde core.limiter
+from app.core.limiter import limiter
+
 app = FastAPI(
     title="ProfesorSYS API",
     description="Sistema de gestión para profesores de música",
     version="1.0.0",
-    docs_url="/docs",  # Swagger UI
-    redoc_url="/redoc",  # ReDoc
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+)
+
+# Registrar rate limiter en la app
+app.state.limiter = limiter
+app.add_exception_handler(
+    RateLimitExceeded,
+    lambda request, exc: JSONResponse(
+        status_code=429,
+        content={"detail": "Demasiados intentos. Espera un momento antes de volver a intentarlo."},
+    ),
 )
 
 # ========================================
@@ -162,17 +187,17 @@ app.add_middleware(TokenRefreshMiddleware)
 # ========================================
 @app.on_event("startup")
 async def startup_event():
-    """
-    Se ejecuta al iniciar la aplicación.
-
-    Aquí puedes:
-    - Verificar conexión a BD
-    - Inicializar servicios
-    - Cargar datos en caché
-    """
     print(">> Iniciando ProfesorSYS API...")
     print(f">> Entorno: {settings.ENVIRONMENT}")
-    print(f">> Base de datos: {settings.DATABASE_URL.split('@')[1]}")  # Oculta credenciales
+    print(f">> Base de datos: {settings.DATABASE_URL.split('@')[1]}")
+
+    # Validación crítica: SECRET_KEY en producción
+    if settings.ENVIRONMENT == "production":
+        if settings.SECRET_KEY == "dev-secret-key-change-in-production":
+            raise RuntimeError(
+                "FATAL: SECRET_KEY no configurada. "
+                "Genera una con: openssl rand -hex 32"
+            )
 
     # Iniciar scheduler de jobs automáticos
     start_scheduler()
@@ -238,6 +263,12 @@ app.include_router(
 )
 
 app.include_router(
+    admin_router,
+    prefix=f"{settings.API_V1_PREFIX}/admin",
+    tags=["Admin"],
+)
+
+app.include_router(
     teachers_router,
     prefix=f"{settings.API_V1_PREFIX}/teachers",
     tags=["Teachers"]
@@ -286,32 +317,57 @@ app.include_router(
 )
 
 app.include_router(
+    websocket_router,
+    prefix=f"{settings.API_V1_PREFIX}",
+    tags=["WebSocket"]
+)
+
+app.include_router(
     sync_router,
     prefix=f"{settings.API_V1_PREFIX}/sync",
     tags=["Sync"]
 )
+
+app.include_router(
+    batch_router,
+    prefix=f"{settings.API_V1_PREFIX}/batch",
+    tags=["Batch"]
+)
+
+
+# ========================================
+# HEALTH CHECK
+# ========================================
+
+@app.get("/health", tags=["Health"])
+async def health_check():
+    """Endpoint liviano para verificar que el servidor está activo.
+    Usado por la app móvil para detectar si el backend local es alcanzable."""
+    return {"status": "ok"}
 
 
 # ========================================
 # MANEJO DE ERRORES
 # ========================================
 @app.exception_handler(404)
-async def not_found_handler(request, exc):
+async def not_found_handler(request: Request, exc):
     """Maneja errores 404 (No encontrado)"""
-    return {
+    content = {
         "error": "Not Found",
         "message": "El recurso solicitado no existe",
         "path": str(request.url),
     }
+    return JSONResponse(status_code=404, content=content)
 
 
 @app.exception_handler(500)
-async def internal_error_handler(request, exc):
+async def internal_error_handler(request: Request, exc):
     """Maneja errores 500 (Error interno del servidor)"""
-    return {
+    content = {
         "error": "Internal Server Error",
         "message": "Ocurrió un error interno en el servidor",
     }
+    return JSONResponse(status_code=500, content=content)
 
 
 if __name__ == "__main__":

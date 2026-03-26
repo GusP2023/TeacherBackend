@@ -119,3 +119,63 @@ class ScheduleResponse(ScheduleBase):
 
     # Permite leer desde objetos SQLAlchemy
     model_config = ConfigDict(from_attributes=True)
+
+
+class ChangeScheduleRequest(BaseModel):
+    """
+    Request para cambiar horario de un alumno.
+
+    - new_day: nuevo día de la semana
+    - new_time: nueva hora
+    - change_from: fecha desde la cual aplica el cambio (inclusive)
+
+    Ejemplo: Cambiar de Martes 16:00 a Jueves 18:00 desde el 15-Mar
+    """
+    new_day: DayOfWeek
+    new_time: time
+    change_from: date
+
+
+class ChangeScheduleResponse(BaseModel):
+    """Respuesta del cambio de horario"""
+    old_schedule_id: int
+    new_schedule_id: int
+    classes_deleted: int
+    classes_generated: int
+    message: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RemoveScheduleRequest(BaseModel):
+    """Request para eliminar un horario con fecha"""
+    remove_from: date = Field(
+        ...,
+        description="Fecha desde la que se elimina el horario (inclusive). Las clases desde esta fecha serán eliminadas."
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "remove_from": "2026-03-01"
+            }
+        }
+
+
+class RemoveScheduleResponse(BaseModel):
+    """Response de eliminación de horario"""
+    schedule_id: int
+    classes_deleted: int
+    valid_until: date
+    message: str
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "schedule_id": 45,
+                "classes_deleted": 12,
+                "valid_until": "2026-03-01",
+                "message": "Horario eliminado exitosamente"
+            }
+        }
+    

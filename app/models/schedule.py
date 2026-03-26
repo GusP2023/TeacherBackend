@@ -148,7 +148,7 @@ class Schedule(Base, TimestampMixin):
     # ========================================
     
     day: Mapped[DayOfWeek] = mapped_column(
-        SQLEnum(DayOfWeek, native_enum=False),
+        SQLEnum(DayOfWeek, native_enum=False, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         index=True,
         comment="Día de la semana (monday, tuesday, etc)"
@@ -188,13 +188,14 @@ class Schedule(Base, TimestampMixin):
     # ========================================
     # ESTADO
     # ========================================
-    
+
     active: Mapped[bool] = mapped_column(
         Boolean,
+        server_default='true',
         default=True,
         nullable=False,
         index=True,
-        comment="Indica si el horario está activo (soft-delete)"
+        comment="Si el horario está activo (false = histórico)"
     )
     
     # ========================================

@@ -13,6 +13,7 @@ IMPORTANTE:
 """
 from datetime import date, datetime
 from pydantic import BaseModel, Field, ConfigDict
+from typing import Optional, List
 
 # Importar enums desde los modelos
 from app.models.enrollment import EnrollmentStatus, EnrollmentLevel
@@ -34,6 +35,10 @@ class EnrollmentBase(BaseModel):
     level: EnrollmentLevel = EnrollmentLevel.ELEMENTAL
     credits: int = Field(default=0, ge=0)  # ge=0 → greater or equal (>=0)
     format: ClassFormat = ClassFormat.INDIVIDUAL  # Formato de clases por defecto
+    manual_credit_dates: List[str] = Field(
+        default_factory=list,
+        description="Array de fechas (YYYY-MM-DD) de créditos agregados manualmente"
+    )
 
 
 class EnrollmentCreate(EnrollmentBase):
@@ -69,7 +74,96 @@ class EnrollmentUpdate(BaseModel):
     suspended_until: date | None = None  # Hasta qué fecha está suspendido
     withdrawn_date: date | None = None    # Fecha de retiro definitivo
     format: ClassFormat | None = None     # Cambiar formato de clases
+    manual_credit_dates: List[str] | None = Field(
+        None,
+        description="Array de fechas (YYYY-MM-DD) de créditos agregados manualmente"
+    )
 
+
+# ========================================
+# SCHEMAS PARA SUSPENSIÓN/REACTIVACIÓN
+# ========================================
+
+class EnrollmentSuspendRequest(BaseModel):
+    """
+    Para SUSPENDER una inscripción (POST /enrollments/{id}/suspend)
+    
+    Acciones automáticas:
+    - Cambia status → 'suspended'
+    - Guarda suspended_at con la fecha actual
+    - ELIMINA todas las clases futuras (scheduled)
+    """
+    reason: Optional[str] = Field(
+        None, 
+        max_length=255,
+        description="Motivo de la suspensión (opcional)"
+    )
+    suspended_until: Optional[date] = Field(
+        None,
+        description="Fecha hasta cuándo está suspendido (opcional)"
+    )
+
+
+class EnrollmentReactivateRequest(BaseModel):
+    """
+    Para REACTIVAR una inscripción (POST /enrollments/{id}/reactivate)
+    
+    Flujo:
+    1. Si use_previous_schedule=True → Valida disponibilidad del horario anterior
+    2. Si use_previous_schedule=False → Se espera que se cree un nuevo schedule después
+    3. Cambia status → 'active'
+    4. Limpia campos de suspensión
+    5. Genera clases desde HOY hasta fin del mes + 2 meses (si tiene schedules activos)
+    """
+    use_previous_schedule: bool = Field(
+        True,
+        description="Si True, intenta reactivar con el horario anterior"
+    )
+
+
+class EnrollmentSuspendResponse(BaseModel):
+    """Respuesta después de suspender"""
+    enrollment_id: int
+    status: EnrollmentStatus
+    suspended_at: date
+    suspended_reason: Optional[str]
+    classes_deleted: int = Field(
+        ...,
+        description="Cantidad de clases futuras eliminadas"
+    )
+    message: str
+
+
+class EnrollmentReactivateResponse(BaseModel):
+    """Respuesta después de reactivar"""
+    enrollment_id: int
+    status: EnrollmentStatus
+    previous_schedule_available: bool
+    classes_generated: int = Field(
+        ...,
+        description="Cantidad de clases generadas"
+    )
+    schedule_conflicts: list[dict] = Field(
+        default_factory=list,
+        description="Lista de conflictos si el horario anterior está ocupado"
+    )
+    message: str
+
+
+class ScheduleAvailabilityCheck(BaseModel):
+    """Para verificar disponibilidad de un horario"""
+    day: str
+    time: str
+    is_available: bool
+    conflict_with: Optional[str] = Field(
+        None,
+        description="Nombre del alumno que ocupa ese horario (si hay conflicto)"
+    )
+
+
+# ========================================
+# RESPONSE PRINCIPAL
+# ========================================
 
 class EnrollmentResponse(EnrollmentBase):
     """
@@ -80,7 +174,9 @@ class EnrollmentResponse(EnrollmentBase):
     - teacher_id: a qué profesor pertenece
     - status: estado actual (active/suspended/withdrawn)
     - enrolled_date: cuándo se inscribió
+    - suspended_at: cuándo se suspendió
     - suspended_until: si está suspendido, hasta cuándo
+    - suspended_reason: motivo de la suspensión
     - withdrawn_date: si se retiró, cuándo fue
     - format: formato de las clases (individual o group)
     - sync_id: para sincronización móvil (opcional)
@@ -90,8 +186,10 @@ class EnrollmentResponse(EnrollmentBase):
     teacher_id: int
     status: EnrollmentStatus
     enrolled_date: date
-    suspended_until: date | None = None
-    withdrawn_date: date | None = None
+    suspended_at: Optional[date] = None
+    suspended_until: Optional[date] = None
+    suspended_reason: Optional[str] = None
+    withdrawn_date: Optional[date] = None
     sync_id: str | None = None
     created_at: datetime
     updated_at: datetime

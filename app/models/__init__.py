@@ -22,6 +22,12 @@ Se importa en este orden:
 from .base import Base, TimestampMixin
 
 # ========================================
+# MULTI-TENANT (debe ir ANTES de Teacher)
+# ========================================
+from .organization import Organization
+from .invitation import Invitation
+
+# ========================================
 # MODELOS INDEPENDIENTES
 # ========================================
 from .teacher import Teacher
@@ -64,6 +70,9 @@ from .attendance import (
     AttendanceStatus
 )
 
+from .suspension_history import SuspensionHistory
+from .security_log import SecurityLog
+
 # ========================================
 # EXPORTS
 # ========================================
@@ -72,6 +81,10 @@ __all__ = [
     "Base",
     "TimestampMixin",
     
+    # Multi-tenant
+    "Organization",
+    "Invitation",
+
     # Modelos
     "Teacher",
     "Instrument",
@@ -80,6 +93,8 @@ __all__ = [
     "Schedule",
     "Class",
     "Attendance",
+    "SuspensionHistory",
+    "SecurityLog",
     
     # Enums de Enrollment
     "EnrollmentStatus",
