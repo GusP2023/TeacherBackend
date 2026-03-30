@@ -160,31 +160,26 @@ app.add_exception_handler(
 # CONFIGURAR CORS
 # ========================================
 
-# CORS dinámico según entorno
-# Desarrollo: localhost
-# Producción: dominios específicos desde variable de entorno ALLOWED_ORIGINS
-# Los orígenes se procesan automáticamente en config.py mediante el validador
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,  # ✅ Solo orígenes permitidos (configurable por entorno)
-    allow_credentials=True,  # Permite cookies/auth headers
-    allow_methods=["*"],  # Permite todos los métodos (GET, POST, PUT, DELETE, etc)
-    allow_headers=["*"],  # Permite todos los headers
-    expose_headers=["X-New-Token"],  # Exponer header de token refresh al frontend
+    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-New-Token"],
 )
 
 # ========================================
 # TOKEN REFRESH MIDDLEWARE
 # ========================================
 
-# Registrar middleware de sliding window token
 # IMPORTANTE: Debe ir DESPUÉS de CORS para que el header X-New-Token sea accesible
 app.add_middleware(TokenRefreshMiddleware)
 
 # ========================================
 # EVENTOS DE CICLO DE VIDA
 # ========================================
+
 @app.on_event("startup")
 async def startup_event():
     print(">> Iniciando ProfesorSYS API...")
@@ -202,187 +197,111 @@ async def startup_event():
     # Iniciar scheduler de jobs automáticos
     start_scheduler()
 
+    # ── WARMUP DE BASE DE DATOS (Neon free tier) ─────────────────────────────
+    # Neon se suspende tras 5 minutos de inactividad y tarda 1-3s en despertar.
+    # Sin este warmup, la primera request real (login, full sync) carga con ese
+    # retraso o falla si el cliente tiene un timeout corto.
+    #
+    # Se reintenta hasta 3 veces con 2s de pausa entre intentos.
+    # Si los 3 fallan, la app sigue iniciando: Neon despertará con la
+    # primera query real (solo esa request verá el retraso residual).
+    # ─────────────────────────────────────────────────────────────────────────
+    import asyncio
+    from sqlalchemy import text
+    from app.core.database import async_session_maker
+
+    print(">> Despertando base de datos (Neon warmup)...")
+    _db_ready = False
+    for attempt in range(1, 4):
+        try:
+            async with async_session_maker() as session:
+                await session.execute(text("SELECT 1"))
+            print(f">> Base de datos lista (intento {attempt}/3)")
+            _db_ready = True
+            break
+        except Exception as e:
+            print(f">> Warmup BD intento {attempt}/3 fallido: {e}")
+            if attempt < 3:
+                await asyncio.sleep(2)
+
+    if not _db_ready:
+        print(">> Warmup no completado — Neon despertará con la primera request")
+
     print(">> Aplicacion lista")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """
-    Se ejecuta al cerrar la aplicación.
-
-    Aquí puedes:
-    - Cerrar conexiones
-    - Limpiar recursos
-    - Guardar estado
-    """
     print(">> Cerrando ProfesorSYS API...")
-
-    # Detener scheduler
     shutdown_scheduler()
 
 
 # ========================================
 # RUTAS PRINCIPALES
 # ========================================
+
 @app.get("/")
 async def root():
-    """
-    Endpoint raíz - Verifica que la API esté funcionando.
-    """
     return {
         "message": "ProfesorSYS API",
         "version": "1.0.0",
         "status": "online",
-        "docs": "/docs",
     }
 
 
-@app.get("/health")
+@app.get("/health", tags=["Health"])
 async def health_check():
-    """
-    Health check - Verifica el estado de la aplicación.
-    
-    Útil para:
-    - Monitoreo
-    - Load balancers
-    - Docker health checks
-    """
-    return {
-        "status": "healthy",
-        "environment": settings.ENVIRONMENT,
-    }
+    """Endpoint liviano para verificar que el servidor está activo.
+    Usado por la app móvil para detectar si el backend es alcanzable."""
+    return {"status": "ok"}
 
 
 # ========================================
 # INCLUIR ROUTERS (API v1)
 # ========================================
-app.include_router(
-    auth_router,
-    prefix=f"{settings.API_V1_PREFIX}/auth",
-    tags=["Authentication"]
-)
 
-app.include_router(
-    admin_router,
-    prefix=f"{settings.API_V1_PREFIX}/admin",
-    tags=["Admin"],
-)
-
-app.include_router(
-    teachers_router,
-    prefix=f"{settings.API_V1_PREFIX}/teachers",
-    tags=["Teachers"]
-)
-
-app.include_router(
-    students_router,
-    prefix=f"{settings.API_V1_PREFIX}/students",
-    tags=["Students"]
-)
-
-app.include_router(
-    instruments_router,
-    prefix=f"{settings.API_V1_PREFIX}/instruments",
-    tags=["Instruments"]
-)
-
-app.include_router(
-    enrollments_router,
-    prefix=f"{settings.API_V1_PREFIX}/enrollments",
-    tags=["Enrollments"]
-)
-
-app.include_router(
-    schedules_router,
-    prefix=f"{settings.API_V1_PREFIX}/schedules",
-    tags=["Schedules"]
-)
-
-app.include_router(
-    classes_router,
-    prefix=f"{settings.API_V1_PREFIX}/classes",
-    tags=["Classes"]
-)
-
-app.include_router(
-    attendances_router,
-    prefix=f"{settings.API_V1_PREFIX}/attendances",
-    tags=["Attendances"]
-)
-
-app.include_router(
-    jobs_router,
-    prefix=f"{settings.API_V1_PREFIX}/jobs",
-    tags=["Jobs"]
-)
-
-app.include_router(
-    websocket_router,
-    prefix=f"{settings.API_V1_PREFIX}",
-    tags=["WebSocket"]
-)
-
-app.include_router(
-    sync_router,
-    prefix=f"{settings.API_V1_PREFIX}/sync",
-    tags=["Sync"]
-)
-
-app.include_router(
-    batch_router,
-    prefix=f"{settings.API_V1_PREFIX}/batch",
-    tags=["Batch"]
-)
-
-
-# ========================================
-# HEALTH CHECK
-# ========================================
-
-@app.get("/health", tags=["Health"])
-async def health_check():
-    """Endpoint liviano para verificar que el servidor está activo.
-    Usado por la app móvil para detectar si el backend local es alcanzable."""
-    return {"status": "ok"}
+app.include_router(auth_router,        prefix=f"{settings.API_V1_PREFIX}/auth",        tags=["Authentication"])
+app.include_router(admin_router,       prefix=f"{settings.API_V1_PREFIX}/admin",        tags=["Admin"])
+app.include_router(teachers_router,    prefix=f"{settings.API_V1_PREFIX}/teachers",     tags=["Teachers"])
+app.include_router(students_router,    prefix=f"{settings.API_V1_PREFIX}/students",     tags=["Students"])
+app.include_router(instruments_router, prefix=f"{settings.API_V1_PREFIX}/instruments",  tags=["Instruments"])
+app.include_router(enrollments_router, prefix=f"{settings.API_V1_PREFIX}/enrollments",  tags=["Enrollments"])
+app.include_router(schedules_router,   prefix=f"{settings.API_V1_PREFIX}/schedules",    tags=["Schedules"])
+app.include_router(classes_router,     prefix=f"{settings.API_V1_PREFIX}/classes",      tags=["Classes"])
+app.include_router(attendances_router, prefix=f"{settings.API_V1_PREFIX}/attendances",  tags=["Attendances"])
+app.include_router(jobs_router,        prefix=f"{settings.API_V1_PREFIX}/jobs",         tags=["Jobs"])
+app.include_router(websocket_router,   prefix=f"{settings.API_V1_PREFIX}",              tags=["WebSocket"])
+app.include_router(sync_router,        prefix=f"{settings.API_V1_PREFIX}/sync",         tags=["Sync"])
+app.include_router(batch_router,       prefix=f"{settings.API_V1_PREFIX}/batch",        tags=["Batch"])
 
 
 # ========================================
 # MANEJO DE ERRORES
 # ========================================
+
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc):
-    """Maneja errores 404 (No encontrado)"""
-    content = {
+    return JSONResponse(status_code=404, content={
         "error": "Not Found",
         "message": "El recurso solicitado no existe",
         "path": str(request.url),
-    }
-    return JSONResponse(status_code=404, content=content)
+    })
 
 
 @app.exception_handler(500)
 async def internal_error_handler(request: Request, exc):
-    """Maneja errores 500 (Error interno del servidor)"""
-    content = {
+    return JSONResponse(status_code=500, content={
         "error": "Internal Server Error",
         "message": "Ocurrió un error interno en el servidor",
-    }
-    return JSONResponse(status_code=500, content=content)
+    })
 
 
 if __name__ == "__main__":
-    """
-    Punto de entrada cuando se ejecuta directamente.
-    
-    En producción, usar:
-        uvicorn app.main:app --host 0.0.0.0 --port 8000
-    """
     import uvicorn
-    
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,  # Auto-reload en desarrollo
+        reload=True,
         log_level="info",
     )
