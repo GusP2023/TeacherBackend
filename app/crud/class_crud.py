@@ -3,7 +3,7 @@ CRUD operations for Class model
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from datetime import datetime, date
 from app.models.class_model import Class, ClassStatus, ClassType
 from app.models.enrollment import Enrollment
@@ -156,6 +156,26 @@ async def create_recovery(
     # Validar créditos
     if enrollment.credits < 1:
         raise ValueError(f"No hay créditos disponibles. Créditos actuales: {enrollment.credits}")
+    
+    # Validar que no exista ya una recuperación para el mismo enrollment+fecha+hora.
+    # Esto previene duplicados por doble-tap o reintento de sync concurrente.
+    duplicate_result = await db.execute(
+        select(Class).where(
+            and_(
+                Class.enrollment_id == class_data.enrollment_id,
+                Class.date == class_data.date,
+                Class.time == class_data.time,
+                Class.type == ClassType.RECOVERY,
+                Class.status != ClassStatus.CANCELLED,
+            )
+        )
+    )
+    existing_recovery = duplicate_result.scalar_one_or_none()
+    if existing_recovery:
+        raise ValueError(
+            f"Ya existe una recuperación para esta inscripción el "
+            f"{class_data.date} a las {str(class_data.time)[:5]} (ID: {existing_recovery.id})"
+        )
     
     # Crear la clase de recuperación
     class_dict = class_data.model_dump()
