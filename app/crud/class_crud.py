@@ -2,12 +2,15 @@
 CRUD operations for Class model
 """
 
+import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from datetime import datetime, date
 from app.models.class_model import Class, ClassStatus, ClassType
 from app.models.enrollment import Enrollment
 from app.schemas.class_schema import ClassCreate, ClassUpdate
+
+logger = logging.getLogger(__name__)
 
 
 async def get(db: AsyncSession, class_id: int) -> Class | None:
@@ -172,6 +175,10 @@ async def create_recovery(
     )
     existing_recovery = duplicate_result.scalar_one_or_none()
     if existing_recovery:
+        logger.warning(
+            f"create_recovery: duplicada enrollment {class_data.enrollment_id} "
+            f"{class_data.date} {class_data.time} (ID existente {existing_recovery.id})"
+        )
         raise ValueError(
             f"Ya existe una recuperación para esta inscripción el "
             f"{class_data.date} a las {str(class_data.time)[:5]} (ID: {existing_recovery.id})"

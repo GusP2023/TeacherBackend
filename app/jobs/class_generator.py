@@ -22,6 +22,7 @@ FUNCIONES PRINCIPALES:
 - delete_future_classes_for_schedule(): Eliminar clases al cambiar horario
 """
 
+import logging
 from datetime import date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, update, delete
@@ -33,6 +34,8 @@ from app.models.enrollment import Enrollment, EnrollmentStatus
 from app.models.attendance import Attendance
 from app.core.holidays import is_holiday
 from sqlalchemy import exists
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================
@@ -121,9 +124,11 @@ async def generate_classes_for_enrollment(
     enrollment = await db.get(Enrollment, enrollment_id)
 
     if not enrollment:
+        logger.warning(f"generate_classes_for_enrollment: enrollment {enrollment_id} no existe")
         return {"error": "Enrollment no existe", "created": 0, "skipped": 0, "errors": []}
 
     if enrollment.status != EnrollmentStatus.ACTIVE:
+        logger.warning(f"generate_classes_for_enrollment: enrollment {enrollment_id} inactivo (status={enrollment.status})")
         return {
             "error": f"Enrollment no está activo (status: {enrollment.status})",
             "created": 0,
@@ -209,6 +214,12 @@ async def _generate_classes_for_schedule(
         end_date = min(end_date, schedule.valid_until)
 
     stats["date_range"] = {"start": str(start_date), "end": str(end_date)}
+
+    if end_date < start_date:
+        msg = f"Rango inválido para schedule {schedule.id}: end_date {end_date} < start_date {start_date}"
+        stats["errors"].append(msg)
+        logger.warning(msg)
+        return stats
 
     # Obtener día de la semana objetivo (0=Lunes, 6=Domingo)
     target_weekday = DAY_MAP[schedule.day]
@@ -306,6 +317,8 @@ async def generate_monthly_classes(db: AsyncSession) -> dict:
     )
     enrollments = result.scalars().all()
 
+    logger.info(f"generate_monthly_classes: procesando {len(enrollments)} enrollments")
+
     total_stats = {
         "created": 0,
         "skipped": 0,
@@ -326,10 +339,12 @@ async def generate_monthly_classes(db: AsyncSession) -> dict:
             total_stats["skipped"] += result["skipped"]
             total_stats["errors"].extend(result.get("errors", []))
             total_stats["enrollments_processed"] += 1
+            logger.info(f"generate_monthly_classes: enrollment {enrollment.id} -> created {result['created']} skipped {result['skipped']}")
         else:
             total_stats["errors"].append(
                 f"Enrollment {enrollment.id}: {result['error']}"
             )
+            logger.warning(f"generate_monthly_classes: enrollment {enrollment.id} error {result['error']}")
 
     await db.commit()
     return total_stats

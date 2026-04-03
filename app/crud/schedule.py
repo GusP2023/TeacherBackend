@@ -281,10 +281,15 @@ async def create(db: AsyncSession, schedule_data: ScheduleCreate) -> Schedule:
             from_date=schedule.valid_from  # 🔥 USAR VALID_FROM para incluir primera clase
         )
         logger.info(f"Clases generadas: {stats}")
+
+        if stats.get('error'):
+            msg = f"Generación parcial/errores: {stats.get('error')} - {stats.get('errors', [])}"
+            logger.error(msg)
+            raise ValueError(msg)
+
     except Exception as e:
-        logger.error(f"Error al generar clases automáticas: {e}")
-        # No fallar el create del schedule si la generación falla
-        # El schedule queda creado pero sin clases (se pueden generar después)
+        logger.error(f"Error al generar clases automáticas para schedule {schedule.id}: {e}", exc_info=True)
+        raise
 
     return schedule
 
