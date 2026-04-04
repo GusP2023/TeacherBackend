@@ -87,9 +87,8 @@ class BatchProcessor:
 
             elif op.type == "DELETE_STUDENT":
                 if not target_id: raise ValueError("ID requerido para DELETE")
-                # Usar soft_delete por seguridad, o remove si se prefiere hard delete
-                # El sistema usa soft_delete para students normalmente
-                await student.soft_delete(self.db, target_id)
+                # Hard-delete: eliminar completamente del sistema (no solo suspender)
+                await student.remove(self.db, target_id)
                 result_id = target_id
 
             # ==========================================
