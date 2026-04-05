@@ -12,7 +12,8 @@ Estrategia:
 """
 
 from datetime import datetime, timezone, date
-from typing import Optional
+from typing import Optional, List, Literal
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
@@ -33,6 +34,9 @@ from app.schemas.sync import (
     InitialSyncResponse,
     DeltaSyncResponse,
     SyncMetadata,
+    VerifyOperationRequest,
+    VerifyOperationsRequest,
+    VerifyOperationsResponse,
 )
 
 router = APIRouter()
@@ -279,3 +283,138 @@ async def sync_delta(
         "attendances": attendances,
         "sync_timestamp": datetime.now().isoformat()
     }
+
+
+@router.post("/verify-operations", response_model=VerifyOperationsResponse)
+async def verify_operations(
+    request: VerifyOperationsRequest,
+    current_teacher: Teacher = Depends(get_current_teacher),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Verifica si las operaciones UPDATE/DELETE fueron aplicadas en el backend.
+    """
+    operations = request.operations
+    results = []
+
+    # Agrupar IDs por entidad para hacer queries en bloque
+    ids_by_entity: dict[str, set[int]] = {
+        "student": set(),
+        "enrollment": set(),
+        "schedule": set(),
+        "class": set(),
+        "attendance": set(),
+    }
+
+    for op in operations:
+        ids_by_entity[op.entity_type].add(op.entity_id)
+
+    entities: dict[str, dict[int, any]] = {
+        "student": {},
+        "enrollment": {},
+        "schedule": {},
+        "class": {},
+        "attendance": {},
+    }
+
+    if ids_by_entity["student"]:
+        students_result = await db.execute(
+            select(Student).where(
+                and_(
+                    Student.teacher_id == current_teacher.id,
+                    Student.id.in_(ids_by_entity["student"]),
+                )
+            )
+        )
+        entities["student"] = {s.id: s for s in students_result.scalars().all()}
+
+    if ids_by_entity["enrollment"]:
+        enrollments_result = await db.execute(
+            select(Enrollment).where(
+                and_(
+                    Enrollment.teacher_id == current_teacher.id,
+                    Enrollment.id.in_(ids_by_entity["enrollment"]),
+                )
+            )
+        )
+        entities["enrollment"] = {e.id: e for e in enrollments_result.scalars().all()}
+
+    if ids_by_entity["schedule"]:
+        schedules_result = await db.execute(
+            select(Schedule).where(
+                and_(
+                    Schedule.teacher_id == current_teacher.id,
+                    Schedule.id.in_(ids_by_entity["schedule"]),
+                )
+            )
+        )
+        entities["schedule"] = {s.id: s for s in schedules_result.scalars().all()}
+
+    if ids_by_entity["class"]:
+        classes_result = await db.execute(
+            select(Class).where(
+                and_(
+                    Class.teacher_id == current_teacher.id,
+                    Class.id.in_(ids_by_entity["class"]),
+                )
+            )
+        )
+        entities["class"] = {c.id: c for c in classes_result.scalars().all()}
+
+    if ids_by_entity["attendance"]:
+        attendances_result = await db.execute(
+            select(Attendance)
+            .join(Class, Attendance.class_id == Class.id)
+            .where(
+                and_(
+                    Class.teacher_id == current_teacher.id,
+                    Attendance.id.in_(ids_by_entity["attendance"]),
+                )
+            )
+        )
+        entities["attendance"] = {a.id: a for a in attendances_result.scalars().all()}
+
+    for op in operations:
+        entity = entities[op.entity_type].get(op.entity_id)
+        verdict = "not_found"
+        server_updated_at = None
+
+        if entity is not None:
+            server_updated_at = entity.updated_at
+            if op.type in {
+                "DELETE_STUDENT",
+                "DELETE_ENROLLMENT",
+                "DELETE_SCHEDULE",
+                "DELETE_CLASS",
+                "DELETE_ATTENDANCE",
+            }:
+                verdict = "not_applied"
+            elif op.type == "CANCEL_CLASS":
+                verdict = "applied" if getattr(entity, "status", None) == "cancelled" else "not_applied"
+            else:
+                verdict = "applied" if entity.updated_at >= op.sent_at else "not_applied"
+
+        else:
+            if op.type in {
+                "DELETE_STUDENT",
+                "DELETE_ENROLLMENT",
+                "DELETE_SCHEDULE",
+                "DELETE_CLASS",
+                "DELETE_ATTENDANCE",
+                "CANCEL_CLASS",
+            }:
+                verdict = "applied"
+            else:
+                verdict = "not_found"
+
+        results.append(
+            {
+                "operation_id": op.operation_id,
+                "entity_type": op.entity_type,
+                "entity_id": op.entity_id,
+                "verdict": verdict,
+                "server_updated_at": server_updated_at,
+            }
+        )
+
+    return {"results": results}

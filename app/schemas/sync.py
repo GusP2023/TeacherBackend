@@ -22,7 +22,7 @@ BENEFICIOS:
 """
 
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field
 
 # Importar schemas de cada modelo (para reutilizar validaciones)
@@ -140,3 +140,34 @@ class DeltaSyncResponse(BaseModel):
     students: List[StudentResponse] = []
     attendances: List[AttendanceResponse] = []
     sync_timestamp: str
+
+
+class VerifyOperationRequest(BaseModel):
+    operation_id: str
+    type: Literal[
+        'UPDATE_STUDENT', 'DELETE_STUDENT',
+        'UPDATE_ENROLLMENT', 'DELETE_ENROLLMENT',
+        'UPDATE_SCHEDULE', 'DELETE_SCHEDULE',
+        'UPDATE_CLASS', 'DELETE_CLASS',
+        'CANCEL_CLASS',
+        'UPDATE_ATTENDANCE', 'DELETE_ATTENDANCE'
+    ]
+    entity_type: Literal['student', 'enrollment', 'schedule', 'class', 'attendance']
+    entity_id: int
+    sent_at: datetime
+
+
+class VerifyOperationResult(BaseModel):
+    operation_id: str
+    entity_type: Literal['student', 'enrollment', 'schedule', 'class', 'attendance']
+    entity_id: int
+    verdict: Literal['applied', 'not_applied', 'not_found']
+    server_updated_at: Optional[datetime] = None
+
+
+class VerifyOperationsRequest(BaseModel):
+    operations: List[VerifyOperationRequest]
+
+
+class VerifyOperationsResponse(BaseModel):
+    results: List[VerifyOperationResult]
