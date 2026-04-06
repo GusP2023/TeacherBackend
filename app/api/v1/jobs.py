@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.logging import log_event, Actions
 from app.core.security import get_current_teacher
+from app.core.scheduler import check_and_run_missed_job
 from app.models.teacher import Teacher
 from app.jobs.class_generator import (
     generate_classes_for_enrollment,
@@ -80,6 +81,37 @@ async def trigger_monthly_class_generation(
         "message": "Generación mensual completada",
         "stats": result
     }
+
+
+@router.post("/check-missed-job")
+async def check_missed_job_endpoint(
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """
+    Verifica y ejecuta jobs mensuales perdidos (si BD estaba dormida)
+
+    Este endpoint ejecuta manualmente la verificación de jobs perdidos
+    que normalmente corre automáticamente en startup.
+
+    Útil cuando:
+    - La BD se despertó después del startup
+    - Se sospecha que un job se perdió
+    - Testing del sistema de recuperación
+
+    Returns:
+        Estado de la verificación
+    """
+    try:
+        await check_and_run_missed_job()
+        return {
+            "message": "Verificación de jobs perdidos completada",
+            "executed": True
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error ejecutando verificación: {str(e)}"
+        )
 
 
 @router.post("/generate-classes/{enrollment_id}")

@@ -199,8 +199,8 @@ async def startup_event():
     # Sin este warmup, la primera request real (login, full sync) carga con ese
     # retraso o falla si el cliente tiene un timeout corto.
     #
-    # Se reintenta hasta 3 veces con 2s de pausa entre intentos.
-    # Si los 3 fallan, la app sigue iniciando: Neon despertará con la
+    # Se reintenta hasta 5 veces con delays progresivos (2s, 5s, 10s, 15s, 20s).
+    # Si todos fallan, la app sigue iniciando: Neon despertará con la
     # primera query real (solo esa request verá el retraso residual).
     # ─────────────────────────────────────────────────────────────────────────
     import asyncio
@@ -209,17 +209,19 @@ async def startup_event():
 
     print(">> Despertando base de datos (Neon warmup)...")
     _db_ready = False
-    for attempt in range(1, 4):
+    delays = [2, 5, 10, 15, 20]  # Delays progresivos
+    for attempt in range(1, len(delays) + 1):
         try:
             async with async_session_maker() as session:
                 await session.execute(text("SELECT 1"))
-            print(f">> Base de datos lista (intento {attempt}/3)")
+            print(f">> Base de datos lista (intento {attempt}/{len(delays)})")
             _db_ready = True
             break
         except Exception as e:
-            print(f">> Warmup BD intento {attempt}/3 fallido: {e}")
-            if attempt < 3:
-                await asyncio.sleep(2)
+            print(f">> Warmup BD intento {attempt}/{len(delays)} fallido: {e}")
+            if attempt < len(delays):
+                print(f">> Esperando {delays[attempt]}s antes del siguiente intento...")
+                await asyncio.sleep(delays[attempt])
 
     if not _db_ready:
         print(">> Warmup no completado — Neon despertará con la primera request")
