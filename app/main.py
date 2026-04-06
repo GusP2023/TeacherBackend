@@ -227,7 +227,8 @@ async def startup_event():
     # Crear tablas faltantes (JobRunLog)
     from app.core.database import engine
     from app.models.job_run_log import JobRunLog
-    JobRunLog.__table__.create(bind=engine, checkfirst=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(JobRunLog.__table__.create, checkfirst=True)
     print(">> Tabla JobRunLog verificada/creada")
 
     # Iniciar scheduler de jobs automáticos
