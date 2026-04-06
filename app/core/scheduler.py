@@ -139,7 +139,7 @@ async def check_and_run_missed_job():
             print(f"[SCHEDULER] Marcador actualizado para {current_month}")
 
     except Exception as e:
-        print(f"[SCHEDULER] Error en check_and_run_missed_job: {str(e)}")
+        print(f"[SCHEDULER] Error en check_and_run_missed_job: {str(e)} — se ejecutará con la primera request")
         # No relanzar la excepción para no interrumpir el startup
 
 

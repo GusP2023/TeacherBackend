@@ -225,11 +225,14 @@ async def startup_event():
         print(">> Warmup no completado — Neon despertará con la primera request")
 
     # Crear tablas faltantes (JobRunLog)
-    from app.core.database import engine
-    from app.models.job_run_log import JobRunLog
-    async with engine.begin() as conn:
-        await conn.run_sync(JobRunLog.__table__.create, checkfirst=True)
-    print(">> Tabla JobRunLog verificada/creada")
+    try:
+        from app.core.database import engine
+        from app.models.job_run_log import JobRunLog
+        async with engine.begin() as conn:
+            await conn.run_sync(JobRunLog.__table__.create, checkfirst=True)
+        print(">> Tabla JobRunLog verificada/creada")
+    except Exception as e:
+        print(f">> Creación tabla JobRunLog fallida: {e} — se creará con la primera query")
 
     # Iniciar scheduler de jobs automáticos
     start_scheduler()
