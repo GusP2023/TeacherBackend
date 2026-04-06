@@ -149,6 +149,7 @@ class VerifyOperationRequest(BaseModel):
         'UPDATE_ENROLLMENT', 'DELETE_ENROLLMENT',
         'UPDATE_SCHEDULE', 'DELETE_SCHEDULE',
         'UPDATE_CLASS', 'DELETE_CLASS',
+        'DELETE_RECOVERY_CLASS',
         'CANCEL_CLASS',
         'UPDATE_ATTENDANCE', 'DELETE_ATTENDANCE'
     ]

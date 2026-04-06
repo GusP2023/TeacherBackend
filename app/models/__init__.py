@@ -72,6 +72,7 @@ from .attendance import (
 
 from .suspension_history import SuspensionHistory
 from .security_log import SecurityLog
+from .job_run_log import JobRunLog
 
 # ========================================
 # EXPORTS
@@ -95,6 +96,7 @@ __all__ = [
     "Attendance",
     "SuspensionHistory",
     "SecurityLog",
+    "JobRunLog",
     
     # Enums de Enrollment
     "EnrollmentStatus",

@@ -15,9 +15,11 @@ IMPORTANTE:
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import date, datetime, timezone
 
-from app.core.database import get_db
+from app.core.database import get_db, async_session_maker
 from app.jobs.class_generator import generate_monthly_classes
+from app.models.job_run_log import JobRunLog
 
 
 # ============================================
@@ -61,11 +63,84 @@ async def monthly_class_generation_job():
                 for error in result['errors'][:5]:  # Mostrar solo primeros 5
                     print(f"    • {error}")
 
+            # Actualizar marcador de ejecución
+            current_month = date.today().strftime("%Y-%m")
+            log_entry = await db.get(JobRunLog, "monthly_class_generation")
+            if log_entry:
+                log_entry.last_run_year_month = current_month
+                log_entry.last_run_at = datetime.now(timezone.utc)
+            else:
+                db.add(JobRunLog(
+                    job_name="monthly_class_generation",
+                    last_run_year_month=current_month,
+                    last_run_at=datetime.now(timezone.utc)
+                ))
+
+            await db.commit()
+            print(f"[JOB] Marcador actualizado para {current_month}")
+
         except Exception as e:
             print(f"[JOB] Error en generación mensual: {str(e)}")
 
         finally:
             break  # Solo usar la primera sesión
+
+
+async def check_and_run_missed_job():
+    """
+    Verifica si el job mensual se perdió por reinicio del servidor.
+
+    Se ejecuta una sola vez en el startup, después de que la BD está lista.
+    Si ya pasó el día 6 del mes actual y el job no se ejecutó este mes,
+    lo ejecuta inmediatamente y actualiza el marcador.
+
+    Lógica:
+    - Solo actuar si today.day >= 6
+    - Verificar marcador en JobRunLog para "monthly_class_generation"
+    - Si no existe o last_run_year_month != mes actual → ejecutar
+    - Actualizar marcador después de ejecutar
+    """
+    today = date.today()
+
+    # Solo actuar si ya pasó el día 6 del mes actual
+    if today.day < 6:
+        print("[SCHEDULER] Día < 6, no verificar job mensual")
+        return
+
+    current_month = today.strftime("%Y-%m")
+
+    try:
+        async with async_session_maker() as db:
+            # Buscar el marcador para "monthly_class_generation"
+            log_entry = await db.get(JobRunLog, "monthly_class_generation")
+
+            # Si ya corrió este mes, no hacer nada
+            if log_entry and log_entry.last_run_year_month == current_month:
+                print(f"[SCHEDULER] Job mensual ya ejecutado este mes ({current_month}), omitiendo")
+                return
+
+            # No corrió este mes → ejecutar ahora
+            print(f"[SCHEDULER] Job mensual no detectado para {current_month}, ejecutando...")
+            result = await generate_monthly_classes(db)
+            print(f"[SCHEDULER] Job completado: {result}")
+
+            # Actualizar o crear el marcador
+            if log_entry:
+                log_entry.last_run_year_month = current_month
+                log_entry.last_run_at = datetime.now(timezone.utc)
+            else:
+                db.add(JobRunLog(
+                    job_name="monthly_class_generation",
+                    last_run_year_month=current_month,
+                    last_run_at=datetime.now(timezone.utc)
+                ))
+
+            await db.commit()
+            print(f"[SCHEDULER] Marcador actualizado para {current_month}")
+
+    except Exception as e:
+        print(f"[SCHEDULER] Error en check_and_run_missed_job: {str(e)}")
+        # No relanzar la excepción para no interrumpir el startup
 
 
 # ============================================
@@ -78,17 +153,17 @@ def start_scheduler():
 
     Se ejecuta automáticamente en el startup event de FastAPI.
     """
-    # Job mensual: día 10 de cada mes a las 2:00 AM
+    # Job mensual: día 6 de cada mes a las 00:00 AM
     scheduler.add_job(
         monthly_class_generation_job,
-        trigger=CronTrigger(day=10, hour=2, minute=0),
+        trigger=CronTrigger(day=6, hour=0, minute=0),
         id='generate_monthly_classes',
         name='Generación mensual de clases',
         replace_existing=True  # Reemplazar si ya existe (útil en desarrollo)
     )
 
     scheduler.start()
-    print("[SCHEDULER] ✅ Iniciado - Job mensual configurado (día 10, 02:00 AM)")
+    print("[SCHEDULER] ✅ Iniciado - Job mensual configurado (día 6, 00:00 AM)")
 
 
 def shutdown_scheduler():

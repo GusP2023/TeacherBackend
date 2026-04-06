@@ -30,7 +30,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from app.core.config import settings
-from app.core.scheduler import start_scheduler, shutdown_scheduler
+from app.core.scheduler import start_scheduler, shutdown_scheduler, check_and_run_missed_job
 from app.core.security import should_refresh_token, refresh_access_token
 
 # ========================================
@@ -194,9 +194,6 @@ async def startup_event():
                 "Genera una con: openssl rand -hex 32"
             )
 
-    # Iniciar scheduler de jobs automáticos
-    start_scheduler()
-
     # ── WARMUP DE BASE DE DATOS (Neon free tier) ─────────────────────────────
     # Neon se suspende tras 5 minutos de inactividad y tarda 1-3s en despertar.
     # Sin este warmup, la primera request real (login, full sync) carga con ese
@@ -226,6 +223,18 @@ async def startup_event():
 
     if not _db_ready:
         print(">> Warmup no completado — Neon despertará con la primera request")
+
+    # Crear tablas faltantes (JobRunLog)
+    from app.core.database import engine
+    from app.models.job_run_log import JobRunLog
+    JobRunLog.__table__.create(bind=engine, checkfirst=True)
+    print(">> Tabla JobRunLog verificada/creada")
+
+    # Iniciar scheduler de jobs automáticos
+    start_scheduler()
+
+    # Verificar si el job mensual se perdió por reinicio del servidor
+    await check_and_run_missed_job()
 
     print(">> Aplicacion lista")
 
