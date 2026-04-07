@@ -240,7 +240,7 @@ class Enrollment(Base, TimestampMixin):
     # ========================================
 
     format: Mapped[ClassFormat] = mapped_column(
-        SQLEnum(ClassFormat, native_enum=False),
+        SQLEnum(ClassFormat, native_enum=False, values_callable=lambda x: [e.value for e in x]),
         default=ClassFormat.INDIVIDUAL,
         nullable=False,
         comment="Formato de las clases: individual o group"
