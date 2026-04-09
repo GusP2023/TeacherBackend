@@ -183,6 +183,10 @@ async def update_enrollment(
         enrollment_obj.status != EnrollmentStatus.ACTIVE
     )
 
+    # Detectar cambio de enrolled_date antes de actualizar
+    old_enrolled_date = enrollment_obj.enrolled_date
+    new_enrolled_date = enrollment_data.enrolled_date  # None si no cambió
+
     updated_enrollment = await enrollment.update(db, enrollment_id, enrollment_data)
 
     # Si se reactivó manualmente vía PATCH:
@@ -203,7 +207,7 @@ async def update_enrollment(
         gen_result = await generate_classes_for_enrollment(
             db, 
             enrollment_id, 
-            months_ahead=2,
+            months_ahead=3,
             from_date=date.today()
         )
         
@@ -213,6 +217,58 @@ async def update_enrollment(
             print(f"✅ [UpdateEnrollment] Clases generadas: {gen_result['created']}")
             
         # Commit final (aunque update() ya hizo uno, necesitamos guardar los schedules y classes)
+        await db.commit()
+
+    # Si cambió enrolled_date: reconciliar clases
+    elif new_enrolled_date and new_enrolled_date != old_enrolled_date:
+        from sqlalchemy import delete as sa_delete
+        from app.models.class_model import Class, ClassStatus, ClassType
+        from app.models.attendance import Attendance
+
+        print(f"📅 [UpdateEnrollment] enrolled_date cambió: {old_enrolled_date} → {new_enrolled_date}")
+
+        # Actualizar valid_from de todos los schedules activos para que coincida
+        await db.execute(
+            sa_update(Schedule)
+            .where(
+                and_(
+                    Schedule.enrollment_id == enrollment_id,
+                    Schedule.active == True,
+                )
+            )
+            .values(valid_from=new_enrolled_date)
+        )
+
+        if new_enrolled_date > old_enrolled_date:
+            # Fecha se movió hacia adelante: eliminar clases sin asistencia antes de la nueva fecha
+            # (las que tienen asistencia se mantienen para histórico)
+            classes_with_att_subq = (
+                select(Attendance.class_id)
+                .where(Attendance.class_id == Class.id)
+                .correlate(Class)
+                .exists()
+            )
+            del_result = await db.execute(
+                sa_delete(Class).where(
+                    and_(
+                        Class.enrollment_id == enrollment_id,
+                        Class.date < new_enrolled_date,
+                        Class.type == ClassType.REGULAR,
+                        Class.status == ClassStatus.SCHEDULED,
+                        ~classes_with_att_subq,
+                    )
+                )
+            )
+            print(f"✅ [UpdateEnrollment] {del_result.rowcount} clases eliminadas antes de la nueva fecha")
+
+        # Siempre generar clases faltantes desde la nueva fecha (idempotente: salta las existentes)
+        gen_result = await generate_classes_for_enrollment(
+            db,
+            enrollment_id,
+            months_ahead=3,
+            from_date=new_enrolled_date,
+        )
+        print(f"✅ [UpdateEnrollment] Clases generadas tras cambio de fecha: {gen_result.get('created', 0)}")
         await db.commit()
 
     await notify_data_change(current_teacher.id, "enrollment", "update", updated_enrollment.id)

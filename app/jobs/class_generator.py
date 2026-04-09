@@ -330,7 +330,7 @@ async def generate_monthly_classes(db: AsyncSession) -> dict:
         result = await generate_classes_for_enrollment(
             db,
             enrollment.id,
-            months_ahead=2,  # Mes actual + 2 meses completos
+            months_ahead=3,  # Mes actual + 2 meses completos
             from_date=date.today()
         )
 

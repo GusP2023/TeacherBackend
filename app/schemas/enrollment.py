@@ -65,6 +65,7 @@ class EnrollmentUpdate(BaseModel):
     - Establecer suspended_until cuando se suspende temporalmente
     - Marcar withdrawn_date cuando se retira definitivamente
     - Cambiar format (individual → group o viceversa)
+    - Cambiar enrolled_date (fecha de inicio de clases)
 
     Todos opcionales para actualizar solo lo necesario.
     """
@@ -74,6 +75,7 @@ class EnrollmentUpdate(BaseModel):
     suspended_until: date | None = None  # Hasta qué fecha está suspendido
     withdrawn_date: date | None = None    # Fecha de retiro definitivo
     format: ClassFormat | None = None     # Cambiar formato de clases
+    enrolled_date: date | None = None     # Cambiar fecha de inicio de clases
     manual_credit_dates: List[str] | None = Field(
         None,
         description="Array de fechas (YYYY-MM-DD) de créditos agregados manualmente"
