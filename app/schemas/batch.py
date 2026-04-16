@@ -1,5 +1,6 @@
 from typing import Literal, Any, Dict, List, Optional
 from pydantic import BaseModel, Field
+from enum import Enum
 
 from app.schemas.student import StudentCreate, StudentUpdate
 from app.schemas.enrollment import EnrollmentCreate, EnrollmentUpdate
@@ -8,16 +9,29 @@ from app.schemas.class_schema import ClassCreate, ClassUpdate
 from app.schemas.attendance import AttendanceCreate, AttendanceUpdate
 from app.models.class_model import ClassType
 
-# Definir tipos de operaciones soportadas
-OperationType = Literal[
-    "CREATE_STUDENT", "UPDATE_STUDENT", "DELETE_STUDENT",
-    "CREATE_ENROLLMENT", "UPDATE_ENROLLMENT", "DELETE_ENROLLMENT",
-    "CREATE_SCHEDULE", "UPDATE_SCHEDULE", "DELETE_SCHEDULE",
-    "CREATE_CLASS", "UPDATE_CLASS", "DELETE_CLASS",
-    "CREATE_RECOVERY_CLASS", "DELETE_RECOVERY_CLASS", "CANCEL_CLASS",
-    "CREATE_ATTENDANCE", "UPDATE_ATTENDANCE", "DELETE_ATTENDANCE",
-    "ADD_PARTIAL_RECOVERY", "REMOVE_PARTIAL_RECOVERY", "CLEAR_PARTIAL_RECOVERIES"
-]
+# Definir tipos de operaciones soportadas como Enum
+class OperationType(str, Enum):
+    CREATE_STUDENT = "CREATE_STUDENT"
+    UPDATE_STUDENT = "UPDATE_STUDENT"
+    DELETE_STUDENT = "DELETE_STUDENT"
+    CREATE_ENROLLMENT = "CREATE_ENROLLMENT"
+    UPDATE_ENROLLMENT = "UPDATE_ENROLLMENT"
+    DELETE_ENROLLMENT = "DELETE_ENROLLMENT"
+    CREATE_SCHEDULE = "CREATE_SCHEDULE"
+    UPDATE_SCHEDULE = "UPDATE_SCHEDULE"
+    DELETE_SCHEDULE = "DELETE_SCHEDULE"
+    CREATE_CLASS = "CREATE_CLASS"
+    UPDATE_CLASS = "UPDATE_CLASS"
+    DELETE_CLASS = "DELETE_CLASS"
+    CREATE_RECOVERY_CLASS = "CREATE_RECOVERY_CLASS"
+    DELETE_RECOVERY_CLASS = "DELETE_RECOVERY_CLASS"
+    CANCEL_CLASS = "CANCEL_CLASS"
+    CREATE_ATTENDANCE = "CREATE_ATTENDANCE"
+    UPDATE_ATTENDANCE = "UPDATE_ATTENDANCE"
+    DELETE_ATTENDANCE = "DELETE_ATTENDANCE"
+    ADD_PARTIAL_RECOVERY = "ADD_PARTIAL_RECOVERY"
+    REMOVE_PARTIAL_RECOVERY = "REMOVE_PARTIAL_RECOVERY"
+    CLEAR_PARTIAL_RECOVERIES = "CLEAR_PARTIAL_RECOVERIES"
 
 class ClassRecoveryCreate(ClassCreate):
     """
