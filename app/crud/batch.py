@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, text
+from sqlalchemy import select, update
 
 from app.crud import student, enrollment, schedule, class_crud, attendance
 from app.models.enrollment import Enrollment
