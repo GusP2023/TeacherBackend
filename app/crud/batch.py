@@ -1,8 +1,10 @@
 import logging
 from typing import Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
 
 from app.crud import student, enrollment, schedule, class_crud, attendance
+from app.models.enrollment import Enrollment
 from app.models.class_model import ClassType
 from app.schemas.batch import BatchOperation, BatchOperationResult, ClassRecoveryCreate
 from app.schemas.student import StudentCreate, StudentUpdate
@@ -201,6 +203,76 @@ class BatchProcessor:
                 if not target_id: raise ValueError("ID requerido para DELETE")
                 await attendance.delete(self.db, target_id)
                 result_id = target_id
+
+            # ==========================================
+            # PARTIAL RECOVERIES
+            # ==========================================
+            elif op.type == "ADD_PARTIAL_RECOVERY":
+                enrollment_id = payload_data.get('enrollment_id')
+                if not enrollment_id: raise ValueError("enrollment_id requerido para ADD_PARTIAL_RECOVERY")
+                date_str = payload_data.get('date')
+                time_str = payload_data.get('time')
+                minutes = payload_data.get('minutes')
+                if not all([date_str, time_str, minutes]): raise ValueError("date, time, minutes requeridos")
+                
+                # Obtener enrollment actual
+                result = await self.db.execute(
+                    select(Enrollment).where(Enrollment.id == enrollment_id)
+                )
+                enr = result.scalar_one_or_none()
+                if not enr: raise ValueError(f"Enrollment {enrollment_id} no encontrado")
+                
+                # Agregar sesión parcial
+                new_session = {"date": date_str, "time": time_str, "minutes": minutes}
+                current_sessions = enr.partial_sessions or []
+                updated_sessions = current_sessions + [new_session]
+                
+                await self.db.execute(
+                    update(Enrollment)
+                    .where(Enrollment.id == enrollment_id)
+                    .values(partial_sessions=updated_sessions)
+                )
+                await self.db.commit()
+                result_id = enrollment_id
+
+            elif op.type == "REMOVE_PARTIAL_RECOVERY":
+                enrollment_id = payload_data.get('enrollment_id')
+                session_index = payload_data.get('session_index')
+                if enrollment_id is None or session_index is None: raise ValueError("enrollment_id y session_index requeridos")
+                
+                # Obtener enrollment actual
+                result = await self.db.execute(
+                    select(Enrollment).where(Enrollment.id == enrollment_id)
+                )
+                enr = result.scalar_one_or_none()
+                if not enr: raise ValueError(f"Enrollment {enrollment_id} no encontrado")
+                
+                # Remover sesión parcial por índice
+                current_sessions = enr.partial_sessions or []
+                if session_index < 0 or session_index >= len(current_sessions):
+                    raise ValueError(f"session_index {session_index} inválido")
+                
+                updated_sessions = current_sessions[:session_index] + current_sessions[session_index + 1:]
+                
+                await self.db.execute(
+                    update(Enrollment)
+                    .where(Enrollment.id == enrollment_id)
+                    .values(partial_sessions=updated_sessions)
+                )
+                await self.db.commit()
+                result_id = enrollment_id
+
+            elif op.type == "CLEAR_PARTIAL_RECOVERIES":
+                enrollment_id = payload_data.get('enrollment_id')
+                if not enrollment_id: raise ValueError("enrollment_id requerido para CLEAR_PARTIAL_RECOVERIES")
+                
+                await self.db.execute(
+                    update(Enrollment)
+                    .where(Enrollment.id == enrollment_id)
+                    .values(partial_sessions=[])
+                )
+                await self.db.commit()
+                result_id = enrollment_id
             
             else:
                 raise ValueError(f"Tipo de operación no soportado: {op.type}")
