@@ -102,6 +102,7 @@ async def create(db: AsyncSession, class_data: ClassCreate) -> Class:
     VALIDACIÓN:
     - type='regular' o 'recovery' → enrollment_id es OBLIGATORIO
     - type='extra' → enrollment_id puede ser None (evento sin alumno)
+    - Validación de duplicados: No puede existir otra clase con mismo enrollment_id, date, time, type
     
     Args:
         db: Sesión de base de datos
@@ -111,12 +112,38 @@ async def create(db: AsyncSession, class_data: ClassCreate) -> Class:
         Class creada con id asignado
     
     Raises:
-        ValueError: Si falta enrollment_id para type regular/recovery
+        ValueError: Si falta enrollment_id para type regular/recovery, o si ya existe una clase duplicada
     """
     # Validar enrollment_id según el tipo
     if class_data.type in [ClassType.REGULAR, ClassType.RECOVERY]:
         if not class_data.enrollment_id:
             raise ValueError(f"enrollment_id es obligatorio para clases de tipo '{class_data.type.value}'")
+    
+    # Validar duplicados: No puede existir clase con mismo enrollment_id + date + time + type
+    # (excepto si es CANCELLED, que permite recrear)
+    if class_data.enrollment_id:
+        duplicate_result = await db.execute(
+            select(Class).where(
+                and_(
+                    Class.enrollment_id == class_data.enrollment_id,
+                    Class.date == class_data.date,
+                    Class.time == class_data.time,
+                    Class.type == class_data.type,
+                    Class.status != ClassStatus.CANCELLED,
+                )
+            )
+        )
+        existing_class = duplicate_result.scalar_one_or_none()
+        if existing_class:
+            logger.warning(
+                f"create: duplicada enrollment {class_data.enrollment_id} "
+                f"{class_data.date} {class_data.time} type={class_data.type.value} "
+                f"(ID existente {existing_class.id})"
+            )
+            raise ValueError(
+                f"Ya existe una clase {class_data.type.value} para este enrollment "
+                f"en {class_data.date} {class_data.time}"
+            )
     
     class_obj = Class(**class_data.model_dump())
     
