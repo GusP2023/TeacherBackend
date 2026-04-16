@@ -11,7 +11,9 @@ import json
 import asyncio
 from datetime import datetime
 
-from app.core.security import get_current_teacher_ws
+from app.core.security import get_current_teacher_ws, decode_token
+from app.core.database import async_session_maker
+from app.crud import teacher as teacher_crud
 from app.models.teacher import Teacher
 
 router = APIRouter()
@@ -104,8 +106,22 @@ async def websocket_endpoint(
     """
     # Autenticar usando el token
     try:
-        teacher = await get_current_teacher_ws(token)
+        # Decodificar token
+        payload = decode_token(token)
+        email: str = payload.get("sub")
+        
+        if not email:
+            raise Exception("Token inválido - sin email")
+        
+        # Buscar teacher en BD
+        async with async_session_maker() as session:
+            teacher = await teacher_crud.get_by_email(session, email)
+        
+        if not teacher:
+            raise Exception("Teacher no encontrado")
+            
     except Exception as e:
+        print(f"[WebSocket] Error de autenticación: {e}")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
