@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, text
 
 from app.crud import student, enrollment, schedule, class_crud, attendance
 from app.models.enrollment import Enrollment
@@ -215,18 +215,19 @@ class BatchProcessor:
                 minutes = payload_data.get('minutes')
                 if not all([date_str, time_str, minutes]): raise ValueError("date, time, minutes requeridos")
                 
-                # Obtener enrollment actual
+                # Validar que el enrollment existe
                 result = await self.db.execute(
                     select(Enrollment).where(Enrollment.id == enrollment_id)
                 )
                 enr = result.scalar_one_or_none()
                 if not enr: raise ValueError(f"Enrollment {enrollment_id} no encontrado")
                 
-                # Agregar sesión parcial
+                # Agregar sesión parcial de forma segura
                 new_session = {"date": date_str, "time": time_str, "minutes": minutes}
                 current_sessions = enr.partial_sessions or []
                 updated_sessions = current_sessions + [new_session]
                 
+                # Update usando SQLAlchemy (seguro contra SQL injection)
                 await self.db.execute(
                     update(Enrollment)
                     .where(Enrollment.id == enrollment_id)
@@ -240,20 +241,21 @@ class BatchProcessor:
                 session_index = payload_data.get('session_index')
                 if enrollment_id is None or session_index is None: raise ValueError("enrollment_id y session_index requeridos")
                 
-                # Obtener enrollment actual
+                # Verificar que el índice sea válido
                 result = await self.db.execute(
                     select(Enrollment).where(Enrollment.id == enrollment_id)
                 )
                 enr = result.scalar_one_or_none()
                 if not enr: raise ValueError(f"Enrollment {enrollment_id} no encontrado")
                 
-                # Remover sesión parcial por índice
                 current_sessions = enr.partial_sessions or []
                 if session_index < 0 or session_index >= len(current_sessions):
-                    raise ValueError(f"session_index {session_index} inválido")
+                    raise ValueError(f"session_index {session_index} inválido (rango: 0-{len(current_sessions)-1})")
                 
+                # Construir nuevo array sin el elemento en session_index
                 updated_sessions = current_sessions[:session_index] + current_sessions[session_index + 1:]
                 
+                # Update atómico
                 await self.db.execute(
                     update(Enrollment)
                     .where(Enrollment.id == enrollment_id)
@@ -265,6 +267,13 @@ class BatchProcessor:
             elif op.type == "CLEAR_PARTIAL_RECOVERIES":
                 enrollment_id = payload_data.get('enrollment_id')
                 if not enrollment_id: raise ValueError("enrollment_id requerido para CLEAR_PARTIAL_RECOVERIES")
+                
+                # Verificar que el enrollment exista
+                result = await self.db.execute(
+                    select(Enrollment).where(Enrollment.id == enrollment_id)
+                )
+                enr = result.scalar_one_or_none()
+                if not enr: raise ValueError(f"Enrollment {enrollment_id} no encontrado")
                 
                 await self.db.execute(
                     update(Enrollment)
