@@ -39,6 +39,10 @@ class EnrollmentBase(BaseModel):
         default_factory=list,
         description="Array de fechas (YYYY-MM-DD) de créditos agregados manualmente"
     )
+    partial_sessions: List[dict] = Field(
+        default_factory=list,
+        description="Array de sesiones parciales de recuperación: [{date: 'YYYY-MM-DD', time: 'HH:MM', minutes: 15|30}]"
+    )
 
 
 class EnrollmentCreate(EnrollmentBase):
@@ -79,6 +83,10 @@ class EnrollmentUpdate(BaseModel):
     manual_credit_dates: List[str] | None = Field(
         None,
         description="Array de fechas (YYYY-MM-DD) de créditos agregados manualmente"
+    )
+    partial_sessions: List[dict] | None = Field(
+        None,
+        description="Array de sesiones parciales de recuperación: [{date: 'YYYY-MM-DD', time: 'HH:MM', minutes: 15|30}]"
     )
 
 

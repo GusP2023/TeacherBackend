@@ -782,3 +782,97 @@ async def suspend_enrollment(
     await db.refresh(enrollment)
 
     return enrollment
+
+
+# ========================================
+# GESTIÓN DE SESIONES PARCIALES DE RECUPERACIÓN
+# ========================================
+
+async def add_partial_session(
+    db: AsyncSession, 
+    enrollment_id: int, 
+    session_data: dict
+) -> bool:
+    """
+    Agregar una sesión parcial de recuperación al enrollment.
+    
+    Args:
+        db: Sesión de base de datos
+        enrollment_id: ID del enrollment
+        session_data: dict con {date: "YYYY-MM-DD", time: "HH:MM", minutes: 15|30}
+    
+    Returns:
+        bool: True si se agregó exitosamente
+    """
+    result = await db.execute(
+        select(Enrollment).where(Enrollment.id == enrollment_id)
+    )
+    enrollment = result.scalar_one_or_none()
+    
+    if not enrollment:
+        return False
+    
+    # Agregar al array existente
+    current_sessions = enrollment.partial_sessions or []
+    current_sessions.append(session_data)
+    enrollment.partial_sessions = current_sessions
+    
+    await db.commit()
+    return True
+
+
+async def remove_partial_session(
+    db: AsyncSession, 
+    enrollment_id: int, 
+    session_index: int
+) -> bool:
+    """
+    Remover una sesión parcial por índice.
+    
+    Args:
+        db: Sesión de base de datos
+        enrollment_id: ID del enrollment
+        session_index: Índice de la sesión a remover (0-based)
+    
+    Returns:
+        bool: True si se removió exitosamente
+    """
+    result = await db.execute(
+        select(Enrollment).where(Enrollment.id == enrollment_id)
+    )
+    enrollment = result.scalar_one_or_none()
+    
+    if not enrollment or not enrollment.partial_sessions:
+        return False
+    
+    # Remover por índice si existe
+    if 0 <= session_index < len(enrollment.partial_sessions):
+        enrollment.partial_sessions.pop(session_index)
+        await db.commit()
+        return True
+    
+    return False
+
+
+async def clear_partial_sessions(db: AsyncSession, enrollment_id: int) -> bool:
+    """
+    Limpiar todas las sesiones parciales (cuando se completa la recovery).
+    
+    Args:
+        db: Sesión de base de datos
+        enrollment_id: ID del enrollment
+    
+    Returns:
+        bool: True si se limpiaron exitosamente
+    """
+    result = await db.execute(
+        select(Enrollment).where(Enrollment.id == enrollment_id)
+    )
+    enrollment = result.scalar_one_or_none()
+    
+    if not enrollment:
+        return False
+    
+    enrollment.partial_sessions = []
+    await db.commit()
+    return True

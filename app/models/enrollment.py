@@ -31,7 +31,7 @@ Estados posibles:
 """
 
 from datetime import date
-from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, UniqueConstraint, ARRAY
+from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, UniqueConstraint, ARRAY, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List, TYPE_CHECKING
 import enum
@@ -235,9 +235,13 @@ class Enrollment(Base, TimestampMixin):
         comment="Array de fechas (YYYY-MM-DD) de créditos agregados manualmente"
     )
 
-    # ========================================
-    # FORMATO DE CLASE
-    # ========================================
+    partial_sessions: Mapped[List[dict]] = mapped_column(
+        JSON,
+        default=list,
+        nullable=False,
+        server_default='[]',
+        comment="Array de sesiones parciales de recuperación: [{date: 'YYYY-MM-DD', time: 'HH:MM', minutes: 15|30}]"
+    )
 
     format: Mapped[ClassFormat] = mapped_column(
         SQLEnum(ClassFormat, native_enum=False, values_callable=lambda x: [e.value for e in x]),
