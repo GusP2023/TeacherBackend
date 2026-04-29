@@ -221,7 +221,7 @@ async def update_enrollment(
 
     # Si cambió enrolled_date: reconciliar clases
     elif new_enrolled_date and new_enrolled_date != old_enrolled_date:
-        from sqlalchemy import delete as sa_delete
+        from sqlalchemy import delete as sa_delete, and_, select
         from app.models.class_model import Class, ClassStatus, ClassType
         from app.models.attendance import Attendance
 
