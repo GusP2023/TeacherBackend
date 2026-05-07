@@ -26,6 +26,7 @@ import logging
 from datetime import date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, update, delete
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import MultipleResultsFound
 
 from app.models.schedule import Schedule, DayOfWeek
@@ -239,6 +240,7 @@ async def _generate_classes_for_schedule(
             return stats
 
     # Generar clases semana por semana
+    classes_to_insert = []
     while current_date <= end_date:
         # Verificar si es feriado
         if is_holiday(current_date):
@@ -246,48 +248,32 @@ async def _generate_classes_for_schedule(
             current_date += timedelta(weeks=1)
             continue
 
-        # Verificar si ya existe clase idéntica. Limitamos a 1 fila para evitar
-        # excepciones si por alguna razón hay más de una clase duplicada en la BD.
-        result = await db.execute(
-            select(Class.id).where(
-                and_(
-                    Class.schedule_id == schedule.id,
-                    Class.date == current_date,
-                    Class.time == schedule.time
-                )
-            ).limit(1)
-        )
-
-        if result.scalar_one_or_none() is not None:
-            # Ya existe al menos una, saltar
-            stats["skipped"] += 1
-            current_date += timedelta(weeks=1)
-            continue
-
-        # Crear clase nueva
-        try:
-            new_class = Class(
-                schedule_id=schedule.id,
-                enrollment_id=enrollment.id,
-                teacher_id=schedule.teacher_id,
-                date=current_date,
-                time=schedule.time,
-                duration=schedule.duration,
-                status=ClassStatus.SCHEDULED,
-                type=ClassType.REGULAR,
-                format=enrollment.format
-            )
-
-            db.add(new_class)
-            stats["created"] += 1
-
-        except Exception as e:
-            stats["errors"].append(
-                f"Error al crear clase {current_date} {schedule.time}: {str(e)}"
-            )
+        classes_to_insert.append({
+            'schedule_id': schedule.id,
+            'enrollment_id': enrollment.id,
+            'teacher_id': schedule.teacher_id,
+            'date': current_date,
+            'time': schedule.time,
+            'duration': schedule.duration,
+            'status': ClassStatus.SCHEDULED,
+            'type': ClassType.REGULAR,
+            'format': enrollment.format
+        })
 
         # Avanzar una semana
         current_date += timedelta(weeks=1)
+
+    # Insertar clases en bulk con ON CONFLICT DO NOTHING
+    if classes_to_insert:
+        try:
+            stmt = insert(Class).values(classes_to_insert)
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=['enrollment_id', 'date', 'time', 'type']
+            )
+            result = await db.execute(stmt)
+            stats["created"] = result.rowcount
+        except Exception as e:
+            stats["errors"].append(f"Error al insertar clases: {str(e)}")
 
     return stats
 
@@ -330,7 +316,7 @@ async def generate_monthly_classes(db: AsyncSession) -> dict:
         result = await generate_classes_for_enrollment(
             db,
             enrollment.id,
-            months_ahead=3,  # Mes actual + 2 meses completos
+            months_ahead=2,  # Mes actual + 2 meses completos = 3 meses total
             from_date=date.today()
         )
 

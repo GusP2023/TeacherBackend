@@ -82,8 +82,7 @@ async def monthly_class_generation_job():
         except Exception as e:
             print(f"[JOB] Error en generación mensual: {str(e)}")
 
-        finally:
-            break  # Solo usar la primera sesión
+        break  # Solo usar la primera sesión
 
 
 async def check_and_run_missed_job():

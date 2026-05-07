@@ -207,7 +207,7 @@ async def update_enrollment(
         gen_result = await generate_classes_for_enrollment(
             db, 
             enrollment_id, 
-            months_ahead=3,
+            months_ahead=2,
             from_date=date.today()
         )
         
@@ -265,7 +265,7 @@ async def update_enrollment(
         gen_result = await generate_classes_for_enrollment(
             db,
             enrollment_id,
-            months_ahead=3,
+            months_ahead=2,
             from_date=new_enrolled_date,
         )
         print(f"✅ [UpdateEnrollment] Clases generadas tras cambio de fecha: {gen_result.get('created', 0)}")
