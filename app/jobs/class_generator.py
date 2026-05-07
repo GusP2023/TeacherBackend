@@ -25,8 +25,7 @@ FUNCIONES PRINCIPALES:
 import logging
 from datetime import date, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, update, delete
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import select, and_, update, delete, insert
 from sqlalchemy.exc import MultipleResultsFound
 
 from app.models.schedule import Schedule, DayOfWeek
@@ -263,17 +262,42 @@ async def _generate_classes_for_schedule(
         # Avanzar una semana
         current_date += timedelta(weeks=1)
 
-    # Insertar clases en bulk con ON CONFLICT DO NOTHING
+    # Insertar clases filtrando duplicados manualmente
+    # ON CONFLICT DO NOTHING no funciona con índices parciales en PostgreSQL
     if classes_to_insert:
         try:
-            stmt = insert(Class).values(classes_to_insert)
-            stmt = stmt.on_conflict_do_nothing(
-                index_elements=['enrollment_id', 'date', 'time', 'type']
+          # Obtener fechas que ya existen para este enrollment en el rango
+          # Esto evita depender del tipo de índice (parcial o total)
+          dates_to_check = [c['date'] for c in classes_to_insert]
+          
+          existing_result = await db.execute(
+            select(Class.date, Class.time, Class.type).where(
+              and_(
+                Class.enrollment_id == enrollment.id,
+                Class.date.in_(dates_to_check),
+                Class.type == ClassType.REGULAR
+              )
             )
-            result = await db.execute(stmt)
-            stats["created"] = result.rowcount
+          )
+          existing_keys = {
+            (row.date, row.time, row.type) 
+            for row in existing_result
+          }
+          
+          # Filtrar solo clases que NO existen
+          new_classes = [
+            c for c in classes_to_insert
+            if (c['date'], c['time'], c['type']) not in existing_keys
+          ]
+          
+          stats["skipped"] += len(classes_to_insert) - len(new_classes)
+          
+          if new_classes:
+            await db.execute(insert(Class).values(new_classes))
+            stats["created"] = len(new_classes)
+            
         except Exception as e:
-            stats["errors"].append(f"Error al insertar clases: {str(e)}")
+          stats["errors"].append(f"Error al insertar clases: {str(e)}")
 
     return stats
 
