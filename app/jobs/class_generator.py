@@ -306,20 +306,21 @@ async def _generate_classes_for_schedule(
 # JOB MENSUAL AUTOMÁTICO
 # ============================================
 
-async def generate_monthly_classes(db: AsyncSession) -> dict:
+async def generate_monthly_classes(db: AsyncSession, from_date: date = None) -> dict:
     """
     Job mensual: Genera clases para todos los enrollments activos.
 
-    Ejecuta automáticamente día 10 de cada mes a las 2:00 AM.
-    Genera clases desde hoy hasta fin del mes actual + 2 meses.
-
     Args:
         db: Sesión de base de datos
+        from_date: Fecha desde la cual generar (default: hoy).
+                   Pasar date.today().replace(day=1) para backfill desde inicio de mes.
 
     Returns:
         dict: Estadísticas de generación
     """
-    # Obtener todos los enrollments activos
+    if from_date is None:
+        from_date = date.today()
+
     result = await db.execute(
         select(Enrollment).where(
             Enrollment.status == EnrollmentStatus.ACTIVE
@@ -327,7 +328,7 @@ async def generate_monthly_classes(db: AsyncSession) -> dict:
     )
     enrollments = result.scalars().all()
 
-    logger.info(f"generate_monthly_classes: procesando {len(enrollments)} enrollments")
+    logger.info(f"generate_monthly_classes: procesando {len(enrollments)} enrollments desde {from_date}")
 
     total_stats = {
         "created": 0,
@@ -340,8 +341,8 @@ async def generate_monthly_classes(db: AsyncSession) -> dict:
         result = await generate_classes_for_enrollment(
             db,
             enrollment.id,
-            months_ahead=2,  # Mes actual + 2 meses completos = 3 meses total
-            from_date=date.today()
+            months_ahead=2,
+            from_date=from_date
         )
 
         if "error" not in result:

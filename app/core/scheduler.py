@@ -51,7 +51,8 @@ async def monthly_class_generation_job():
     # Obtener sesión de base de datos
     async for db in get_db():
         try:
-            result = await generate_monthly_classes(db)
+            from_date = date.today().replace(day=1)  # Generar clases a partir del primer día del mes actual
+            result = await generate_monthly_classes(db, from_date=from_date)
 
             print(f"[JOB] Generación completada:")
             print(f"  - Clases creadas: {result['created']}")
@@ -120,7 +121,9 @@ async def check_and_run_missed_job():
 
             # No corrió este mes → ejecutar ahora
             print(f"[SCHEDULER] Job mensual no detectado para {current_month}, ejecutando...")
-            result = await generate_monthly_classes(db)
+            from datetime import date
+            start_of_month = date.today().replace(day=1)
+            result = await generate_monthly_classes(db, from_date=start_of_month)
             print(f"[SCHEDULER] Job completado: {result}")
 
             # Actualizar o crear el marcador
