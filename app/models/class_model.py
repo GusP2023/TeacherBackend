@@ -177,11 +177,10 @@ class Class(Base, TimestampMixin):
         comment="ID del horario template que generó esta clase (NULL si es recuperación)"
     )
     
-    enrollment_id: Mapped[int | None] = mapped_column(
-        ForeignKey("enrollments.id", ondelete="SET NULL"), 
-        nullable=True,  # Nullable para eventos tipo 'extra'
+    enrollment_id: Mapped[int] = mapped_column(
+        ForeignKey("enrollments.id", ondelete="CASCADE"),
+        nullable=False,  # Ya no hay razón para que sea nullable
         index=True,
-        comment="ID de la inscripción (NULL para eventos 'extra')"
     )
     
     teacher_id: Mapped[int] = mapped_column(
