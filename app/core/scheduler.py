@@ -121,7 +121,6 @@ async def check_and_run_missed_job():
 
             # No corrió este mes → ejecutar ahora
             print(f"[SCHEDULER] Job mensual no detectado para {current_month}, ejecutando...")
-            from datetime import date
             start_of_month = date.today().replace(day=1)
             result = await generate_monthly_classes(db, from_date=start_of_month)
             print(f"[SCHEDULER] Job completado: {result}")
