@@ -181,16 +181,18 @@ class BatchProcessor:
             # ATTENDANCE
             # ==========================================
             elif op.type == "CREATE_ATTENDANCE":
-                # Attendance no lleva teacher_id en schema create
-                # payload_data tiene teacher_id inyectado, Pydantic lo ignorará si extra='ignore'
-                # o debemos quitarlo. AttendanceCreate hereda de AttendanceBase, no tiene teacher_id.
-                # Pydantic BaseConfig default es ignore extra fields? 
-                # StudentBase no tiene config extra. BaseModel default es 'ignore'.
-                # Vamos a limpiar teacher_id por seguridad para Attendance
                 clean_payload = {k: v for k, v in payload_data.items() if k != 'teacher_id'}
                 schema = AttendanceCreate(**clean_payload)
-                obj = await attendance.create(self.db, schema)
-                result_id = obj.id
+                
+                # Idempotente: si ya existe, retornar la existente como éxito
+                # Evita que reintentos fallen con UniqueViolationError cuando el primer
+                # intento fue exitoso pero la app no recibió la respuesta
+                existing = await attendance.get_by_class(self.db, schema.class_id)
+                if existing:
+                    result_id = existing.id
+                else:
+                    obj = await attendance.create(self.db, schema)
+                    result_id = obj.id
 
             elif op.type == "UPDATE_ATTENDANCE":
                 if not target_id: raise ValueError("ID requerido para UPDATE")
