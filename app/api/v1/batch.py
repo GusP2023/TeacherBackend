@@ -119,9 +119,8 @@ async def process_batch(
         original_commit = db.commit
         
         async def mock_commit():
-            # Flush pending changes so IDs are generated and queries (refreshes) work
-            # within the transaction, but do NOT permanently commit yet.
-            await db.flush()
+            # No-op: acumular cambios en memoria, flush/commit al final
+            pass
             
         # Reemplazar commit temporalmente
         db.commit = mock_commit
