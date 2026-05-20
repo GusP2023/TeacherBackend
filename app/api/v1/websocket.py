@@ -40,16 +40,15 @@ class ConnectionManager:
         await websocket.accept()
 
         # Cerrar conexiones anteriores del mismo profesor (reconexión)
-        if teacher_id in active_connections:
-            old_connections = list(active_connections[teacher_id])
-            for old_ws in old_connections:
-                try:
-                    await old_ws.close(code=1000)
-                except Exception:
-                    pass
-            active_connections[teacher_id].clear()
-        else:
-            active_connections[teacher_id] = set()
+        # IMPORTANTE: resetear el set ANTES de los awaits para evitar KeyError
+        # por race condition entre conexiones simultáneas del mismo profesor
+        old_connections = list(active_connections.get(teacher_id, set()))
+        active_connections[teacher_id] = set()  # reset atómico antes de cualquier await
+        for old_ws in old_connections:
+            try:
+                await old_ws.close(code=1000)
+            except Exception:
+                pass
 
         active_connections[teacher_id].add(websocket)
         logger.info(f"[WebSocket] CONECTADO — Profesor: {teacher_name} ({teacher_email}) | ID: {teacher_id}")
