@@ -12,7 +12,7 @@ import asyncio
 import logging
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 from app.core.security import get_current_teacher_ws, decode_token
 from app.core.database import async_session_maker
