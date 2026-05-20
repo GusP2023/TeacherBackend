@@ -9,7 +9,10 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, status
 from typing import Dict, Set
 import json
 import asyncio
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from app.core.security import get_current_teacher_ws, decode_token
 from app.core.database import async_session_maker
@@ -33,7 +36,7 @@ class ConnectionManager:
     - Broadcast a todos los clientes de un profesor
     """
 
-    async def connect(self, websocket: WebSocket, teacher_id: int):
+    async def connect(self, websocket: WebSocket, teacher_id: int, teacher_email: str = "", teacher_name: str = ""):
         await websocket.accept()
 
         # Cerrar conexiones anteriores del mismo profesor (reconexión)
@@ -49,7 +52,7 @@ class ConnectionManager:
             active_connections[teacher_id] = set()
 
         active_connections[teacher_id].add(websocket)
-        print(f"[WebSocket] Profesor {teacher_id} conectado. Total: {len(active_connections[teacher_id])}")
+        logger.info(f"[WebSocket] CONECTADO — Profesor: {teacher_name} ({teacher_email}) | ID: {teacher_id}")
 
     def disconnect(self, websocket: WebSocket, teacher_id: int):
         """Desconectar un cliente WebSocket"""
@@ -60,7 +63,7 @@ class ConnectionManager:
             if len(active_connections[teacher_id]) == 0:
                 del active_connections[teacher_id]
 
-            print(f"[WebSocket] Profesor {teacher_id} desconectado")
+            logger.info(f"[WebSocket] DESCONECTADO — Profesor ID: {teacher_id}")
 
     async def send_to_teacher(self, teacher_id: int, message: dict):
         """
@@ -82,7 +85,7 @@ class ConnectionManager:
             try:
                 await connection.send_text(message_json)
             except Exception as e:
-                print(f"[WebSocket] Error enviando a profesor {teacher_id}: {e}")
+                logger.warning(f"[WebSocket] Error enviando a profesor {teacher_id}: {e}")
                 disconnected.append(connection)
 
         # Limpiar conexiones muertas
@@ -129,12 +132,12 @@ async def websocket_endpoint(
             raise Exception("Teacher no encontrado")
             
     except Exception as e:
-        print(f"[WebSocket] Error de autenticación: {e}")
+        logger.warning(f"[WebSocket] Error de autenticación: {e}")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
     # Conectar
-    await manager.connect(websocket, teacher.id)
+    await manager.connect(websocket, teacher.id, teacher_email=teacher.email, teacher_name=teacher.name)
 
     # Enviar confirmación de conexión
     await websocket.send_text(json.dumps({
@@ -160,7 +163,7 @@ async def websocket_endpoint(
     except WebSocketDisconnect:
         manager.disconnect(websocket, teacher.id)
     except Exception as e:
-        print(f"[WebSocket] Error en conexión: {e}")
+        logger.error(f"[WebSocket] Error en conexión — Profesor ID {teacher.id}: {e}")
         manager.disconnect(websocket, teacher.id)
 
 
@@ -191,4 +194,4 @@ async def notify_data_change(
     }
 
     await manager.send_to_teacher(teacher_id, message)
-    print(f"[WebSocket] Notificado profesor {teacher_id}: {entity} {operation} {entity_id}")
+    logger.info(f"[WebSocket] Notificado profesor {teacher_id}: {entity} {operation} id={entity_id}")
