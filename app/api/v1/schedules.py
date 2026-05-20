@@ -448,16 +448,6 @@ async def remove_schedule_with_date(
             detail="El horario ya no está activo"
         )
     
-    # Validar que remove_from es presente o futuro
-    from datetime import date as date_module
-    today = date_module.today()
-    
-    if data.remove_from < today:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="La fecha de eliminación no puede ser en el pasado"
-        )
-    
     # Ejecutar eliminación
     try:
         result = await remove_schedule_with_history(
