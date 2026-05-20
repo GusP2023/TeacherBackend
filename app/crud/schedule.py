@@ -685,6 +685,10 @@ async def remove_schedule_with_history(
         select(Schedule).where(Schedule.id == schedule_id)
     )
     schedule = result.scalar_one()
+
+    # Validar que no se intente extender un horario ya inactivo hacia el futuro
+    if not schedule.active and schedule.valid_until and remove_from > schedule.valid_until:
+        raise ValueError("No puedes extender la fecha de un horario inactivo porque el cupo pudo haber sido ocupado. Usa el botón 'Reactivar' en su lugar.")
     
     # Eliminar clases regulares scheduled desde remove_from
     delete_result = await db.execute(

@@ -442,11 +442,11 @@ async def remove_schedule_with_date(
         )
     
     # Verificar que está activo
-    if not schedule_obj.active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="El horario ya no está activo"
-        )
+    # if not schedule_obj.active:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_400_BAD_REQUEST,
+    #         detail="El horario ya no está activo"
+    #     )
     
     # Ejecutar eliminación
     try:
