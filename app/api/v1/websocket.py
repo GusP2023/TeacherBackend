@@ -50,19 +50,18 @@ class ConnectionManager:
             except Exception:
                 pass
 
-        active_connections[teacher_id].add(websocket)
+        active_connections.setdefault(teacher_id, set()).add(websocket)
         logger.info(f"[WebSocket] CONECTADO — Profesor: {teacher_name} ({teacher_email}) | ID: {teacher_id}")
 
     def disconnect(self, websocket: WebSocket, teacher_id: int):
         """Desconectar un cliente WebSocket"""
         if teacher_id in active_connections:
             active_connections[teacher_id].discard(websocket)
+            # NO eliminar la key aunque el set quede vacío
+            # Evita race condition donde connect() resetea el set,
+            # disconnect() lo borra, y connect() falla al hacer .add()
 
-            # Limpiar si no hay más conexiones
-            if len(active_connections[teacher_id]) == 0:
-                del active_connections[teacher_id]
-
-            logger.info(f"[WebSocket] DESCONECTADO — Profesor ID: {teacher_id}")
+        logger.info(f"[WebSocket] DESCONECTADO — Profesor ID: {teacher_id}")
 
     async def send_to_teacher(self, teacher_id: int, message: dict):
         """
