@@ -16,7 +16,7 @@ Endpoints:
 from datetime import date, time as time_module
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from pydantic import BaseModel, Field, ConfigDict
@@ -926,7 +926,7 @@ class RoomAvailabilityResponse(BaseModel):
 async def get_room_availability(
     day: DayOfWeek,
     time: str,
-    duration: int = Field(..., gt=0),
+    duration: int = Query(..., gt=0),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(require_role("org_admin")),
 ):
