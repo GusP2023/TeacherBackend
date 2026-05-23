@@ -17,6 +17,7 @@ Relaciones:
 from datetime import date
 from decimal import Decimal
 from sqlalchemy import String, Boolean, Numeric, Integer, ForeignKey, Date, Text, Table, Column
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List, TYPE_CHECKING
 
@@ -30,6 +31,8 @@ if TYPE_CHECKING:
     from .class_model import Class
     from .organization import Organization
     from .instrument import Instrument
+    from .room_assignment import RoomAssignment
+    from .room_override import RoomOverride
 
 # Tabla de asociación Teacher <-> Instrument (many-to-many)
 teacher_instruments = Table(
@@ -173,6 +176,17 @@ class Teacher(Base, TimestampMixin):
         comment="Rol del teacher: org_admin|teacher|coordinator|administrative"
     )
 
+    custom_permissions: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+        comment=(
+            "Overrides de permisos individuales para este teacher. "
+            "NULL = usa defaults del rol sin modificaciones. "
+            'Formato: {"students.create": false, "classes.delete": true}'
+        )
+    )
+
     # ========================================
     # RELACIONES
     # ========================================
@@ -200,6 +214,18 @@ class Teacher(Base, TimestampMixin):
     )
     
     schedules: Mapped[List["Schedule"]] = relationship(
+        back_populates="teacher",
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    room_assignments: Mapped[List["RoomAssignment"]] = relationship(
+        back_populates="teacher",
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    room_overrides: Mapped[List["RoomOverride"]] = relationship(
         back_populates="teacher",
         cascade="all, delete-orphan",
         lazy="noload"

@@ -7,7 +7,6 @@ organization_id en cada query de los endpoints.
 """
 
 from sqlalchemy import String, Boolean, Text
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List, TYPE_CHECKING
 
@@ -16,6 +15,7 @@ from .base import Base, TimestampMixin
 if TYPE_CHECKING:
     from .teacher import Teacher
     from .invitation import Invitation
+    from .branch import Branch
 
 
 class Organization(Base, TimestampMixin):
@@ -78,19 +78,15 @@ class Organization(Base, TimestampMixin):
         comment="Notas internas (uso del SaaS admin)"
     )
 
-    role_permissions: Mapped[dict | None] = mapped_column(
-        JSONB,
-        nullable=True,
-        default=None,
-        comment=(
-            "Overrides de permisos por rol. NULL = sin restricciones (usa defaults del sistema). "
-            'Formato: {"teacher": {"students.create": false, ...}}'
-        )
-    )
-
     # ── Relaciones ──────────────────────────────────────────────────────
     teachers: Mapped[List["Teacher"]] = relationship(
         back_populates="organization",
+        lazy="noload"
+    )
+
+    branches: Mapped[List["Branch"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
         lazy="noload"
     )
 

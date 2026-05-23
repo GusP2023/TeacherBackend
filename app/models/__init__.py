@@ -55,6 +55,11 @@ from .schedule import (
     DayOfWeek
 )
 
+from .branch import Branch
+from .room import Room
+from .room_assignment import RoomAssignment
+from .room_override import RoomOverride
+
 from .class_model import (
     Class,
     ClassStatus,
@@ -104,6 +109,10 @@ __all__ = [
     
     # Enums de Schedule
     "DayOfWeek",
+    "Branch",
+    "Room",
+    "RoomAssignment",
+    "RoomOverride",
     
     # Enums de Class
     "ClassStatus",

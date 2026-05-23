@@ -17,6 +17,10 @@ Namespace de claves (usar siempre "dominio.accion"):
   classes.*    → operaciones sobre clases/asistencia/recuperaciones
   finances.*   → acceso a información financiera
   org.*        → operaciones administrativas de la organización
+
+  Lectura vs escritura en students:
+    students.view_enrollment  → solo ver inscripción (nivel, instrumento, créditos)
+    students.edit_enrollment  → modificar inscripción (implica view)
 """
 
 # ── Defaults del sistema ──────────────────────────────────────────────────────
@@ -30,6 +34,7 @@ PERMISSION_DEFAULTS: dict[str, dict[str, bool]] = {
     "org_admin": {
         # Acceso total — nunca se restringe, es el dueño/directora
         "students.create":            True,
+        "students.view_enrollment":   True,
         "students.edit_personal":     True,
         "students.edit_enrollment":   True,
         "students.edit_schedule":     True,
@@ -49,14 +54,15 @@ PERMISSION_DEFAULTS: dict[str, dict[str, bool]] = {
 
     "teacher": {
         # Defaults para un profesor dentro de una institución.
-        # La institución puede desactivar cualquiera de estos mediante overrides,
+        # La institución puede ajustar cualquiera mediante overrides
         # excepto los protegidos por ALWAYS_ALLOWED_KEYS.
-        "students.create":            True,
+        "students.create":            False,  # No registra alumnos nuevos
+        "students.view_enrollment":   True,   # Puede ver inscripción (nivel, créditos)
         "students.edit_personal":     True,   # Protegido: siempre puede editar datos personales
-        "students.edit_enrollment":   True,
-        "students.edit_schedule":     True,
-        "students.suspend":           True,
-        "students.delete":            False,  # No puede borrar alumnos por defecto
+        "students.edit_enrollment":   False,  # No modifica inscripción
+        "students.edit_schedule":     False,  # No modifica horarios
+        "students.suspend":           False,  # No suspende alumnos
+        "students.delete":            False,  # No puede borrar alumnos
         "classes.mark_attendance":    True,   # Protegido: función principal del profesor
         "classes.create_recovery":    True,
         "classes.delete":             False,
@@ -73,6 +79,7 @@ PERMISSION_DEFAULTS: dict[str, dict[str, bool]] = {
         # Asistente académico: solo lectura de alumnos y agenda global.
         # No edita datos, no tiene acceso a finanzas.
         "students.create":            False,
+        "students.view_enrollment":   True,   # Puede ver inscripción
         "students.edit_personal":     False,
         "students.edit_enrollment":   False,
         "students.edit_schedule":     False,
@@ -94,6 +101,7 @@ PERMISSION_DEFAULTS: dict[str, dict[str, bool]] = {
         # Secretaria/Admin: registra alumnos, maneja agenda y finanzas.
         # No marca asistencias (eso es del profesor en la app mobile).
         "students.create":            True,
+        "students.view_enrollment":   True,
         "students.edit_personal":     True,
         "students.edit_enrollment":   True,
         "students.edit_schedule":     True,
@@ -125,38 +133,31 @@ ALWAYS_ALLOWED_KEYS = {"students.edit_personal", "classes.mark_attendance"}
 def resolve_permissions(
     role: str,
     organization_id: int | None,
-    org_overrides: dict | None,
+    custom_permissions: dict | None,
 ) -> dict[str, bool]:
     """
-    Resuelve los permisos efectivos para un teacher dado su contexto.
+    Resuelve los permisos efectivos para un teacher.
 
-    Args:
-        role:            Rol del teacher ('org_admin', 'teacher', etc.)
-        organization_id: ID de la organización. Si es None → independiente.
-        org_overrides:   JSONB de la organización, o None si no hay overrides.
-                         Formato esperado: {"teacher": {"students.create": False, ...}}
+    Dos capas:
+      1. Defaults del rol (PERMISSION_DEFAULTS)
+      2. Overrides individuales del teacher (custom_permissions en BD)
 
-    Returns:
-        Dict con todos los permisos resueltos: {"students.create": True, ...}
-
-    Casos cubiertos:
-        1. organization_id is None → independiente → acceso total (= org_admin)
-        2. role in UNRESTRICTED_ROLES → acceso total sin overrides
-        3. Cualquier otro rol → defaults del rol + overrides de la org para ese rol
+    Casos especiales:
+      - organization_id is None → profesor independiente → acceso total
+      - role in UNRESTRICTED_ROLES → acceso total sin restricciones
     """
-    # Casos 1 y 2: acceso total sin restricciones
+    # Acceso total: independiente o rol sin restricciones
     if organization_id is None or role in UNRESTRICTED_ROLES:
         return dict(PERMISSION_DEFAULTS["org_admin"])
 
-    # Defaults del rol (copia para no mutar el original)
+    # Base: defaults del rol
     base = dict(PERMISSION_DEFAULTS.get(role, PERMISSION_DEFAULTS["teacher"]))
 
-    # Aplicar overrides de la organización para este rol
-    if org_overrides and isinstance(org_overrides, dict):
-        role_overrides = org_overrides.get(role, {})
-        for key, value in role_overrides.items():
+    # Aplicar overrides individuales del teacher
+    if custom_permissions and isinstance(custom_permissions, dict):
+        for key, value in custom_permissions.items():
             if key not in base:
-                continue  # Ignora claves desconocidas (seguridad)
+                continue  # Ignora claves desconocidas
             if key in ALWAYS_ALLOWED_KEYS:
                 continue  # Nunca se puede restringir una clave protegida
             base[key] = bool(value)
