@@ -32,15 +32,11 @@ async def get_my_profile(
     El cliente (Mobile o Admin web) solo necesita leer el campo `permissions`
     sin conocer la lógica de resolución.
     """
-    # Resolver permisos efectivos
-    org_overrides = None
-    if current_teacher.organization:
-        org_overrides = current_teacher.organization.role_permissions
-
+    # Resolver permisos efectivos con nuevo sistema (custom_permissions por teacher)
     permissions = resolve_permissions(
         role=current_teacher.role,
         organization_id=current_teacher.organization_id,
-        org_overrides=org_overrides,
+        custom_permissions=current_teacher.custom_permissions,
     )
 
     # Construir respuesta manualmente para incluir el campo calculado
@@ -86,13 +82,10 @@ async def update_my_profile(
         )
 
     # Incluir permisos resueltos en la respuesta
-    org_overrides = None
-    if updated_teacher.organization:
-        org_overrides = updated_teacher.organization.role_permissions
     permissions = resolve_permissions(
         role=updated_teacher.role,
         organization_id=updated_teacher.organization_id,
-        org_overrides=org_overrides,
+        custom_permissions=updated_teacher.custom_permissions,
     )
     response = TeacherResponse.model_validate(updated_teacher)
     response.permissions = permissions
@@ -137,13 +130,10 @@ async def update_my_instruments(
     await db.commit()
     await db.refresh(current_teacher)
 
-    org_overrides = None
-    if current_teacher.organization:
-        org_overrides = current_teacher.organization.role_permissions
     permissions = resolve_permissions(
         role=current_teacher.role,
         organization_id=current_teacher.organization_id,
-        org_overrides=org_overrides,
+        custom_permissions=current_teacher.custom_permissions,
     )
     response = TeacherResponse.model_validate(current_teacher)
     response.permissions = permissions
