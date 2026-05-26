@@ -13,7 +13,7 @@ Endpoints:
     GET   /admin/permissions/schema              → Ver qué permisos son configurables (con labels)
 """
 
-from datetime import date, time as time_module
+from datetime import date as datetime_date, time as time_module
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -575,7 +575,8 @@ class RoomAssignmentCreate(BaseModel):
     day: DayOfWeek
     time: time_module
     duration: int = Field(..., gt=0)
-    valid_from: date
+    valid_from: datetime_date
+    valid_until: datetime_date | None = None
 
 
 class RoomAssignmentResponse(BaseModel):
@@ -585,8 +586,8 @@ class RoomAssignmentResponse(BaseModel):
     day: DayOfWeek
     time: time_module
     duration: int
-    valid_from: date
-    valid_until: date | None = None
+    valid_from: datetime_date
+    valid_until: datetime_date | None = None
     created_at: str
     updated_at: str
 
@@ -678,7 +679,7 @@ async def list_room_assignments(
     if not current_teacher.organization_id:
         return []
 
-    today = date.today()
+    today = datetime_date.today()
     query = select(RoomAssignment).join(Room).where(
         Room.organization_id == current_teacher.organization_id,
         or_(
@@ -726,7 +727,7 @@ async def close_room_assignment(
             detail="Asignación de sala no encontrada en tu organización.",
         )
 
-    assignment.valid_until = date.today()
+    assignment.valid_until = datetime_date.today()
     await db.commit()
     await db.refresh(assignment)
     return assignment
@@ -735,7 +736,7 @@ async def close_room_assignment(
 class RoomOverrideCreate(BaseModel):
     teacher_id: int
     room_id: int | None = None
-    date: date
+    date: datetime_date
     time: time_module
     duration: int = Field(..., gt=0)
     reason: str | None = Field(None, max_length=255)
@@ -745,7 +746,7 @@ class RoomOverrideResponse(BaseModel):
     id: int
     teacher_id: int
     room_id: int | None = None
-    date: date
+    date: datetime_date
     time: time_module
     duration: int
     reason: str | None = None
@@ -852,7 +853,7 @@ async def list_room_overrides(
                 detail="Sala no encontrada en tu organización.",
             )
 
-    today = date.today()
+    today = datetime_date.today()
     query = select(RoomOverride).join(Teacher).where(
         Teacher.organization_id == current_teacher.organization_id,
         RoomOverride.date >= today,
@@ -954,7 +955,7 @@ async def get_room_availability(
             RoomAssignment.day == day,
             or_(
                 RoomAssignment.valid_until.is_(None),
-                RoomAssignment.valid_until > date.today(),
+                RoomAssignment.valid_until > datetime_date.today(),
             ),
         )
     )
@@ -1084,7 +1085,7 @@ class EventCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: str | None = Field(None)
     event_type: str = Field(default="other")
-    date: date
+    date: datetime_date
     time_start: time_module
     duration: int = Field(..., gt=0)
     room_id: int | None = None
@@ -1099,7 +1100,7 @@ class EventUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=200)
     description: str | None = None
     event_type: str | None = None
-    date: date | None = None
+    date: datetime_date | None = None
     time_start: time_module | None = None
     duration: int | None = Field(None, gt=0)
     room_id: int | None = None
@@ -1138,7 +1139,7 @@ class EventResponse(BaseModel):
     title: str
     description: str | None
     event_type: str
-    date: date
+    date: datetime_date
     time_start: time_module
     duration: int
     guest_name: str | None
@@ -1326,8 +1327,8 @@ async def create_event(
     summary="Listar eventos de la organización",
 )
 async def list_events(
-    date_from: date | None = None,
-    date_to: date | None = None,
+    date_from: datetime_date | None = None,
+    date_to: datetime_date | None = None,
     event_type: str | None = None,
     room_id: int | None = None,
     teacher_id: int | None = None,
@@ -1361,7 +1362,7 @@ async def list_events(
     if room_id is not None:
         query = query.where(Event.room_id == room_id)
     if upcoming_only:
-        query = query.where(Event.date >= date.today())
+        query = query.where(Event.date >= datetime_date.today())
     if teacher_id is not None:
         query = query.join(Event.teachers).where(Teacher.id == teacher_id).distinct()
 
