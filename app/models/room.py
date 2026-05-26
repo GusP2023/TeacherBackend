@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from .branch import Branch
     from .room_assignment import RoomAssignment
     from .room_override import RoomOverride
+    from .event import Event
 
 
 class Room(Base, TimestampMixin):
@@ -82,6 +83,11 @@ class Room(Base, TimestampMixin):
     overrides: Mapped[List["RoomOverride"]] = relationship(
         back_populates="room",
         cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    events: Mapped[List["Event"]] = relationship(
+        back_populates="room",
         lazy="noload"
     )
 

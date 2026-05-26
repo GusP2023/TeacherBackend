@@ -59,6 +59,7 @@ from .branch import Branch
 from .room import Room
 from .room_assignment import RoomAssignment
 from .room_override import RoomOverride
+from .event import Event, EVENT_TYPES
 
 from .class_model import (
     Class,
@@ -113,6 +114,8 @@ __all__ = [
     "Room",
     "RoomAssignment",
     "RoomOverride",
+    "Event",
+    "EVENT_TYPES",
     
     # Enums de Class
     "ClassStatus",

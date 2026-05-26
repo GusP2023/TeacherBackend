@@ -36,6 +36,7 @@ from .base import Base, TimestampMixin
 if TYPE_CHECKING:
     from .teacher import Teacher
     from .enrollment import Enrollment
+    from .event import Event
 
 
 class Student(Base, TimestampMixin):
@@ -166,6 +167,12 @@ class Student(Base, TimestampMixin):
         back_populates="student",
         cascade="all, delete-orphan",
         lazy="selectin"
+    )
+
+    events: Mapped[List["Event"]] = relationship(
+        secondary="event_students",
+        back_populates="students",
+        lazy="noload"
     )
 
     def __repr__(self) -> str:

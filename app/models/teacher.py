@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from .instrument import Instrument
     from .room_assignment import RoomAssignment
     from .room_override import RoomOverride
+    from .event import Event
 
 # Tabla de asociación Teacher <-> Instrument (many-to-many)
 teacher_instruments = Table(
@@ -230,7 +231,21 @@ class Teacher(Base, TimestampMixin):
         cascade="all, delete-orphan",
         lazy="noload"
     )
-    
+
+    # Eventos donde es titular
+    events: Mapped[List["Event"]] = relationship(
+        secondary="event_teachers",
+        back_populates="teachers",
+        lazy="noload"
+    )
+
+    # Eventos que creó
+    created_events: Mapped[List["Event"]] = relationship(
+        foreign_keys="Event.created_by_id",
+        back_populates="created_by",
+        lazy="noload"
+    )
+
     classes: Mapped[List["Class"]] = relationship(
         back_populates="teacher",
         cascade="all, delete-orphan",

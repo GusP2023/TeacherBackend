@@ -28,10 +28,12 @@ from app.core.permissions import (
     resolve_permissions,
 )
 from app.models.branch import Branch
+from app.models.event import Event, EVENT_TYPES
 from app.models.room import Room
 from app.models.room_assignment import RoomAssignment
 from app.models.room_override import RoomOverride
 from app.models.schedule import DayOfWeek
+from app.models.student import Student
 from app.models.teacher import Teacher, VALID_ROLES
 from app.schemas.invitation import InvitationCreate, InvitationResponse
 from app.schemas.teacher import TeacherResponse
@@ -1070,4 +1072,516 @@ async def update_teacher_permissions(
         "role": target.role,
         "custom_permissions": target.custom_permissions,
         "resolved": resolved,
+    }
+
+
+# ────────────────────────────────────────────────────
+# EVENTOS
+# ────────────────────────────────────────────────────
+
+
+class EventCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str | None = Field(None)
+    event_type: str = Field(default="other")
+    date: date
+    time_start: time_module
+    duration: int = Field(..., gt=0)
+    room_id: int | None = None
+    guest_name: str | None = Field(None, max_length=200)
+    guest_email: str | None = Field(None, max_length=255)
+    notes: str | None = None
+    teacher_ids: list[int] = Field(default_factory=list)
+    student_ids: list[int] = Field(default_factory=list)
+
+
+class EventUpdate(BaseModel):
+    title: str | None = Field(None, min_length=1, max_length=200)
+    description: str | None = None
+    event_type: str | None = None
+    date: date | None = None
+    time_start: time_module | None = None
+    duration: int | None = Field(None, gt=0)
+    room_id: int | None = None
+    guest_name: str | None = None
+    guest_email: str | None = None
+    notes: str | None = None
+    teacher_ids: list[int] | None = None
+    student_ids: list[int] | None = None
+
+
+class TeacherBrief(BaseModel):
+    id: int
+    name: str
+    email: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StudentBrief(BaseModel):
+    id: int
+    name: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RoomBrief(BaseModel):
+    id: int
+    name: str
+    branch_id: int
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EventResponse(BaseModel):
+    id: int
+    organization_id: int
+    room_id: int | None
+    room: RoomBrief | None
+    title: str
+    description: str | None
+    event_type: str
+    date: date
+    time_start: time_module
+    duration: int
+    guest_name: str | None
+    guest_email: str | None
+    notes: str | None
+    created_by_id: int | None
+    created_by: TeacherBrief | None
+    teachers: list[TeacherBrief]
+    students: list[StudentBrief]
+    calendar_emails: list[str]
+    created_at: str
+    updated_at: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+def build_event_response(event: Event) -> dict:
+    emails: set[str] = set()
+    for teacher in event.teachers or []:
+        if teacher.email:
+            emails.add(teacher.email)
+    for student in event.students or []:
+        if student.email:
+            emails.add(student.email)
+    if event.guest_email:
+        emails.add(event.guest_email)
+
+    return {
+        "id": event.id,
+        "organization_id": event.organization_id,
+        "room_id": event.room_id,
+        "room": event.room,
+        "title": event.title,
+        "description": event.description,
+        "event_type": event.event_type,
+        "date": event.date,
+        "time_start": event.time_start,
+        "duration": event.duration,
+        "guest_name": event.guest_name,
+        "guest_email": event.guest_email,
+        "notes": event.notes,
+        "created_by_id": event.created_by_id,
+        "created_by": event.created_by,
+        "teachers": event.teachers,
+        "students": event.students,
+        "calendar_emails": sorted(emails),
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+        "updated_at": event.updated_at.isoformat() if event.updated_at else None,
+    }
+
+
+def _validate_email_format(email: str) -> None:
+    if "@" not in email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email inválido. Debe contener '@'.",
+        )
+
+
+async def _load_teachers_for_organization(db: AsyncSession, teacher_ids: list[int], org_id: int) -> list[Teacher]:
+    if not teacher_ids:
+        return []
+
+    unique_teacher_ids = list(dict.fromkeys(teacher_ids))
+    result = await db.execute(
+        select(Teacher).where(
+            Teacher.id.in_(unique_teacher_ids),
+            Teacher.organization_id == org_id,
+        )
+    )
+    teachers = result.scalars().all()
+    missing = [teacher_id for teacher_id in unique_teacher_ids if teacher_id not in {t.id for t in teachers}]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Teacher no encontrado en tu organización: {missing[0]}.",
+        )
+    return teachers
+
+
+async def _load_students_for_organization(db: AsyncSession, student_ids: list[int], org_id: int) -> list[Student]:
+    if not student_ids:
+        return []
+
+    unique_student_ids = list(dict.fromkeys(student_ids))
+    result = await db.execute(
+        select(Student).join(Teacher).where(
+            Student.id.in_(unique_student_ids),
+            Teacher.organization_id == org_id,
+        )
+    )
+    students = result.scalars().all()
+    missing = [student_id for student_id in unique_student_ids if student_id not in {s.id for s in students}]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Student no encontrado en tu organización: {missing[0]}.",
+        )
+    return students
+
+
+@router.post(
+    "/events",
+    response_model=EventResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear evento",
+)
+async def create_event(
+    data: EventCreate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_role("org_admin")),
+):
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    if data.event_type not in EVENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Tipo de evento inválido. Opciones válidas: {', '.join(EVENT_TYPES)}.",
+        )
+
+    if data.duration <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La duración debe ser mayor a 0.",
+        )
+
+    if data.guest_email is not None:
+        _validate_email_format(data.guest_email)
+
+    room = None
+    if data.room_id is not None:
+        room_result = await db.execute(
+            select(Room).where(
+                Room.id == data.room_id,
+                Room.organization_id == current_teacher.organization_id,
+            )
+        )
+        room = room_result.scalar_one_or_none()
+        if not room:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Sala no encontrada en tu organización.",
+            )
+        if not room.active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Sala inactiva. No se puede asignar a un evento.",
+            )
+
+    validated_teachers = await _load_teachers_for_organization(
+        db, data.teacher_ids, current_teacher.organization_id
+    )
+    validated_students = await _load_students_for_organization(
+        db, data.student_ids, current_teacher.organization_id
+    )
+
+    event = Event(
+        organization_id=current_teacher.organization_id,
+        room_id=data.room_id,
+        title=data.title,
+        description=data.description,
+        event_type=data.event_type,
+        date=data.date,
+        time_start=data.time_start,
+        duration=data.duration,
+        guest_name=data.guest_name,
+        guest_email=data.guest_email,
+        notes=data.notes,
+        created_by_id=current_teacher.id,
+    )
+    event.teachers = validated_teachers
+    event.students = validated_students
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+    return build_event_response(event)
+
+
+@router.get(
+    "/events",
+    response_model=list[EventResponse],
+    summary="Listar eventos de la organización",
+)
+async def list_events(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    event_type: str | None = None,
+    room_id: int | None = None,
+    teacher_id: int | None = None,
+    upcoming_only: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_role("org_admin")),
+):
+    if not current_teacher.organization_id:
+        return []
+
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El filtro date_from no puede ser mayor que date_to.",
+        )
+
+    if event_type is not None and event_type not in EVENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Tipo de evento inválido. Opciones válidas: {', '.join(EVENT_TYPES)}.",
+        )
+
+    query = select(Event).where(Event.organization_id == current_teacher.organization_id)
+
+    if date_from is not None:
+        query = query.where(Event.date >= date_from)
+    if date_to is not None:
+        query = query.where(Event.date <= date_to)
+    if event_type is not None:
+        query = query.where(Event.event_type == event_type)
+    if room_id is not None:
+        query = query.where(Event.room_id == room_id)
+    if upcoming_only:
+        query = query.where(Event.date >= date.today())
+    if teacher_id is not None:
+        query = query.join(Event.teachers).where(Teacher.id == teacher_id).distinct()
+
+    query = query.order_by(Event.date, Event.time_start)
+    result = await db.execute(query)
+    events = result.scalars().unique().all()
+    return [build_event_response(event) for event in events]
+
+
+@router.get(
+    "/events/{event_id}",
+    response_model=EventResponse,
+    summary="Obtener un evento",
+)
+async def get_event(
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_role("org_admin")),
+):
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    result = await db.execute(
+        select(Event).where(
+            Event.id == event_id,
+            Event.organization_id == current_teacher.organization_id,
+        )
+    )
+    event = result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evento no encontrado en tu organización.",
+        )
+    return build_event_response(event)
+
+
+@router.patch(
+    "/events/{event_id}",
+    response_model=EventResponse,
+    summary="Actualizar un evento",
+)
+async def update_event(
+    event_id: int,
+    data: EventUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_role("org_admin")),
+):
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    result = await db.execute(
+        select(Event).where(
+            Event.id == event_id,
+            Event.organization_id == current_teacher.organization_id,
+        )
+    )
+    event = result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evento no encontrado en tu organización.",
+        )
+
+    data_dict = data.model_dump(exclude_unset=True)
+
+    if "event_type" in data_dict and data.event_type is not None:
+        if data.event_type not in EVENT_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Tipo de evento inválido. Opciones válidas: {', '.join(EVENT_TYPES)}.",
+            )
+
+    if "duration" in data_dict and data.duration is not None and data.duration <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La duración debe ser mayor a 0.",
+        )
+
+    if "guest_email" in data_dict and data.guest_email is not None:
+        _validate_email_format(data.guest_email)
+
+    if "room_id" in data_dict:
+        if data.room_id is not None:
+            room_result = await db.execute(
+                select(Room).where(
+                    Room.id == data.room_id,
+                    Room.organization_id == current_teacher.organization_id,
+                )
+            )
+            room = room_result.scalar_one_or_none()
+            if not room:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Sala no encontrada en tu organización.",
+                )
+            if not room.active:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Sala inactiva. No se puede asignar a un evento.",
+                )
+            event.room_id = data.room_id
+        else:
+            event.room_id = None
+
+    if "title" in data_dict:
+        event.title = data.title
+    if "description" in data_dict:
+        event.description = data.description
+    if "event_type" in data_dict:
+        event.event_type = data.event_type
+    if "date" in data_dict:
+        event.date = data.date
+    if "time_start" in data_dict:
+        event.time_start = data.time_start
+    if "duration" in data_dict:
+        event.duration = data.duration
+    if "guest_name" in data_dict:
+        event.guest_name = data.guest_name
+    if "guest_email" in data_dict:
+        event.guest_email = data.guest_email
+    if "notes" in data_dict:
+        event.notes = data.notes
+
+    if "teacher_ids" in data_dict:
+        event.teachers = await _load_teachers_for_organization(
+            db, data.teacher_ids or [], current_teacher.organization_id
+        )
+
+    if "student_ids" in data_dict:
+        event.students = await _load_students_for_organization(
+            db, data.student_ids or [], current_teacher.organization_id
+        )
+
+    await db.commit()
+    await db.refresh(event)
+    return build_event_response(event)
+
+
+@router.delete(
+    "/events/{event_id}",
+    summary="Eliminar un evento",
+)
+async def delete_event(
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_role("org_admin")),
+):
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    result = await db.execute(
+        select(Event).where(
+            Event.id == event_id,
+            Event.organization_id == current_teacher.organization_id,
+        )
+    )
+    event = result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evento no encontrado en tu organización.",
+        )
+
+    await db.delete(event)
+    await db.commit()
+    return {"deleted": True, "event_id": event_id}
+
+
+@router.get(
+    "/events/{event_id}/calendar-emails",
+    summary="Obtener emails del evento para Google Calendar",
+)
+async def get_event_calendar_emails(
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_role("org_admin")),
+):
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    result = await db.execute(
+        select(Event).where(
+            Event.id == event_id,
+            Event.organization_id == current_teacher.organization_id,
+        )
+    )
+    event = result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evento no encontrado en tu organización.",
+        )
+
+    emails: list[str] = []
+    for teacher in event.teachers or []:
+        if teacher.email:
+            emails.append(teacher.email)
+    for student in event.students or []:
+        if student.email:
+            emails.append(student.email)
+    if event.guest_email:
+        emails.append(event.guest_email)
+
+    unique_emails = sorted(set(emails))
+    return {
+        "event_id": event.id,
+        "title": event.title,
+        "emails": unique_emails,
+        "total": len(unique_emails),
     }

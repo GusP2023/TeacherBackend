@@ -15,6 +15,7 @@ from .base import Base, TimestampMixin
 if TYPE_CHECKING:
     from .teacher import Teacher
     from .invitation import Invitation
+    from .event import Event
     from .branch import Branch
 
 
@@ -91,6 +92,12 @@ class Organization(Base, TimestampMixin):
     )
 
     invitations: Mapped[List["Invitation"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    events: Mapped[List["Event"]] = relationship(
         back_populates="organization",
         cascade="all, delete-orphan",
         lazy="noload"
