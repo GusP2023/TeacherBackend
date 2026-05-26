@@ -25,8 +25,6 @@ from app.core.database import get_db
 from app.core.security import require_role
 from app.core.permissions import (
     PERMISSION_DEFAULTS,
-    UNRESTRICTED_ROLES,
-    ALWAYS_ALLOWED_KEYS,
     resolve_permissions,
 )
 from app.models.branch import Branch
@@ -231,23 +229,20 @@ async def get_permissions_schema(
     No incluye 'org_admin' ya que sus permisos nunca se configuran.
     Los permisos marcados como `protected: true` no pueden ser desactivados.
     """
-    configurable_roles = [r for r in PERMISSION_DEFAULTS if r not in UNRESTRICTED_ROLES]
+    # Todos los roles son configurables — el admin decide
     result = {}
-
-    for role in configurable_roles:
-        defaults = PERMISSION_DEFAULTS[role]
+    for role, defaults in PERMISSION_DEFAULTS.items():
         keys = []
         for key, default_value in defaults.items():
             label, description = _PERMISSION_LABELS.get(key, (key, ""))
             keys.append(PermissionKeyLabel(
                 key=key,
                 default=default_value,
-                protected=key in ALWAYS_ALLOWED_KEYS,
+                protected=False,
                 label=label,
                 description=description,
             ))
         result[role] = keys
-
     return result
 
 
@@ -1048,30 +1043,22 @@ async def update_teacher_permissions(
             detail="Teacher no encontrado en tu organización.",
         )
 
-    if target.role in UNRESTRICTED_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"No se pueden configurar permisos de un teacher con rol '{target.role}'.",
-        )
-
     if data.custom_permissions is None:
-        # Reset: vuelve a usar los defaults del rol sin overrides
         target.custom_permissions = None
     else:
         known_keys = set(PERMISSION_DEFAULTS.get(target.role, {}).keys())
         clean: dict[str, bool] = {}
-
         for key, value in data.custom_permissions.items():
             if key not in known_keys:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Clave de permiso desconocida: '{key}' para rol '{target.role}'.",
                 )
-            if key in ALWAYS_ALLOWED_KEYS:
-                continue  # Silenciosamente ignorada — nunca se puede restringir
             clean[key] = bool(value)
-
+        # Asignar con flag_modified para forzar que SQLAlchemy detecte el cambio en JSONB
+        from sqlalchemy.orm.attributes import flag_modified
         target.custom_permissions = clean if clean else None
+        flag_modified(target, "custom_permissions")
 
     await db.commit()
     await db.refresh(target)
