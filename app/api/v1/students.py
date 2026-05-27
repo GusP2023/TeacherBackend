@@ -20,6 +20,9 @@ from app.schemas.student import (
     StudentUpdate,
 )
 from app.api.v1.websocket import notify_data_change
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -181,7 +184,7 @@ async def get_student_history(
         elif class_obj.notes:
             notes_value = class_obj.notes
 
-        print('history class_obj.time=', repr(class_obj.time))
+        logger.info('history class_obj.time=%s class_id=%s class_type=%s attendance=%s', repr(class_obj.time), class_obj.id, getattr(class_obj, 'type', None), bool(attendance_obj))
 
         history.append(
             StudentHistoryItem(
@@ -199,6 +202,15 @@ async def get_student_history(
                 notes=notes_value,
             )
         )
+
+    # Log the serialized payload so it appears in gunicorn/uvicorn logs
+    try:
+        payload = [h.model_dump() for h in history]
+    except Exception:
+        # Fallback: best-effort repr
+        payload = [repr(h) for h in history]
+
+    logger.info('returning history payload count=%s payload=%s', len(payload), payload)
 
     return history
 
