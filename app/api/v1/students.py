@@ -22,7 +22,11 @@ from app.schemas.student import (
 from app.api.v1.websocket import notify_data_change
 import logging
 
-logger = logging.getLogger(__name__)
+# Prefer the server-managed loggers so messages appear under gunicorn/uvicorn
+logger = logging.getLogger("uvicorn.error")
+if not logger.handlers:
+    logger = logging.getLogger("gunicorn.error")
+logger.setLevel(logging.INFO)
 
 router = APIRouter()
 
