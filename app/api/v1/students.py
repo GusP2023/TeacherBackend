@@ -17,6 +17,7 @@ from app.schemas.student import (
     StudentCreate,
     StudentHistoryItem,
     StudentResponse,
+    StudentUpdate,
 )
 from app.api.v1.websocket import notify_data_change
 
