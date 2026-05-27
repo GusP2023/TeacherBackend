@@ -118,13 +118,24 @@ async def get_student(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Alumno {student_id} no encontrado"
         )
-    
-    # Verificar que el alumno pertenece al profesor logueado
-    if student_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para ver este alumno"
-        )
+    # Verificar pertenencia: si el teacher actual pertenece a una organización,
+    # permitir ver alumnos cuyo teacher pertenezca a la misma organización.
+    # Si el teacher es independiente (sin organization_id), solo permitir sus propios alumnos.
+    result = await db.execute(select(Teacher).where(Teacher.id == student_obj.teacher_id))
+    student_teacher = result.scalar_one_or_none()
+
+    if current_teacher.organization_id:
+        if not student_teacher or student_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver este alumno"
+            )
+    else:
+        if student_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver este alumno"
+            )
     
     return student_obj
 
@@ -149,12 +160,22 @@ async def get_student_history(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Alumno {student_id} no encontrado"
         )
+    # Verificación por organización similar a get_student
+    result = await db.execute(select(Teacher).where(Teacher.id == student_obj.teacher_id))
+    student_teacher = result.scalar_one_or_none()
 
-    if student_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para ver el historial de este alumno"
-        )
+    if current_teacher.organization_id:
+        if not student_teacher or student_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver el historial de este alumno"
+            )
+    else:
+        if student_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver el historial de este alumno"
+            )
 
     result = await db.execute(
         select(Class)
@@ -253,12 +274,24 @@ async def update_student(
             detail=f"Alumno {student_id} no encontrado"
         )
     
-    # Verificar que pertenece al profesor
-    if student_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para actualizar este alumno"
-        )
+    # Verificación por organización: permitir si el teacher del alumno pertenece
+    # a la misma organización que el teacher autenticado; si el teacher autenticado
+    # es independiente, solo permitir sus propios alumnos.
+    result = await db.execute(select(Teacher).where(Teacher.id == student_obj.teacher_id))
+    student_teacher = result.scalar_one_or_none()
+
+    if current_teacher.organization_id:
+        if not student_teacher or student_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para actualizar este alumno"
+            )
+    else:
+        if student_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para actualizar este alumno"
+            )
     
     # Actualizar
     updated_student = await student.update(db, student_id, student_data)
@@ -300,12 +333,22 @@ async def delete_student(
             detail=f"Alumno {student_id} no encontrado"
         )
     
-    # Verificar que pertenece al profesor
-    if student_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para eliminar este alumno"
-        )
+    # Verificación por organización para eliminación (mismo patrón que arriba)
+    result = await db.execute(select(Teacher).where(Teacher.id == student_obj.teacher_id))
+    student_teacher = result.scalar_one_or_none()
+
+    if current_teacher.organization_id:
+        if not student_teacher or student_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para eliminar este alumno"
+            )
+    else:
+        if student_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para eliminar este alumno"
+            )
     
     # Hard-delete
     success = await student.remove(db, student_id)
