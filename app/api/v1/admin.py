@@ -18,7 +18,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from pydantic import BaseModel, Field, ConfigDict
 
 from app.core.database import get_db
@@ -35,7 +35,9 @@ from app.models.room_override import RoomOverride
 from app.models.schedule import DayOfWeek
 from app.models.student import Student
 from app.models.teacher import Teacher, VALID_ROLES
+from app.models.enrollment import Enrollment, EnrollmentStatus
 from app.schemas.invitation import InvitationCreate, InvitationResponse
+from app.schemas.student import StudentResponse
 from app.schemas.teacher import TeacherResponse
 from app.crud import invitation as invitation_crud
 
@@ -119,6 +121,89 @@ async def list_org_teachers(
         ).order_by(Teacher.name)
     )
     return result.scalars().all()
+
+
+class AdminStudentResponse(StudentResponse):
+    enrollments_count: int
+    total_credits: int
+
+
+@router.get(
+    "/students",
+    response_model=list[AdminStudentResponse],
+    summary="Listar alumnos de la organización",
+)
+async def list_org_students(
+    search: str | None = Query(None, description="Buscar por nombre"),
+    teacher_id: int | None = Query(None, description="Filtrar por teacher_id"),
+    active: bool | None = Query(None, description="Filtrar por estado activo"),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("students.view_enrollment")),
+):
+    """Lista todos los alumnos de la organización."""
+    if not current_teacher.organization_id:
+        return []
+
+    query = select(Student).join(Teacher).where(
+        Teacher.organization_id == current_teacher.organization_id
+    )
+
+    if search:
+        query = query.where(Student.name.ilike(f"%{search}%"))
+
+    if teacher_id is not None:
+        query = query.where(Student.teacher_id == teacher_id)
+
+    if active is not None:
+        query = query.where(Student.active == active)
+
+    query = query.order_by(Student.name)
+    result = await db.execute(query)
+    students = result.scalars().all()
+
+    if not students:
+        return []
+
+    student_ids = [student.id for student in students]
+    enrollments_result = await db.execute(
+        select(
+            Enrollment.student_id,
+            func.count(Enrollment.id),
+            func.sum(Enrollment.credits),
+        )
+        .where(
+            Enrollment.student_id.in_(student_ids),
+            Enrollment.status == EnrollmentStatus.ACTIVE,
+        )
+        .group_by(Enrollment.student_id)
+    )
+
+    enrollment_stats = {
+        row[0]: {
+            "count": row[1],
+            "sum": row[2] or 0,
+        }
+        for row in enrollments_result.all()
+    }
+
+    return [
+        AdminStudentResponse(
+            id=student.id,
+            teacher_id=student.teacher_id,
+            name=student.name,
+            phone=student.phone,
+            email=student.email,
+            birthdate=student.birthdate,
+            notes=student.notes,
+            sync_id=student.sync_id,
+            active=student.active,
+            created_at=student.created_at,
+            updated_at=student.updated_at,
+            enrollments_count=enrollment_stats.get(student.id, {"count": 0})["count"],
+            total_credits=enrollment_stats.get(student.id, {"sum": 0})["sum"],
+        )
+        for student in students
+    ]
 
 
 class TeacherAdminUpdate(BaseModel):
