@@ -134,6 +134,12 @@ class Student(Base, TimestampMixin):
         nullable=True,
         comment="Notas opcionales del profesor sobre el alumno"
     )
+
+    tutor_name: Mapped[str | None] = mapped_column(
+        String(150),
+        nullable=True,
+        comment="Nombre del tutor o apoderado del alumno"
+    )
     
     # ========================================
     # SINCRONIZACIÓN FUTURA

@@ -28,6 +28,7 @@ class StudentBase(BaseModel):
     phone: str | None = Field(None, max_length=20)
     email: EmailStr | None = None
     birthdate: date | None = None
+    tutor_name: str | None = None
     notes: str | None = None
 
 
