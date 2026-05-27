@@ -86,3 +86,15 @@ class StudentResponse(StudentBase):
     updated_at: datetime
     
     model_config = ConfigDict(from_attributes=True)
+
+
+class StudentHistoryItem(BaseModel):
+    """Item de historial de clases para un alumno."""
+    class_id: int
+    date: date
+    enrollment_id: int
+    instrument: str
+    status: str | None = None
+    notes: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)

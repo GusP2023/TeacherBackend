@@ -1,7 +1,7 @@
 """
 Admin endpoints — Gestión de la organización y sus teachers.
 
-Solo accesibles por teachers con rol org_admin.
+Solo accesibles por teachers con permisos administrativos reales de la organización.
 
 Endpoints:
     POST  /admin/invite                          → Crear invitación para un nuevo teacher
@@ -22,7 +22,7 @@ from sqlalchemy import select, or_
 from pydantic import BaseModel, Field, ConfigDict
 
 from app.core.database import get_db
-from app.core.security import require_role
+from app.core.security import require_permission
 from app.core.permissions import (
     PERMISSION_DEFAULTS,
     resolve_permissions,
@@ -55,7 +55,7 @@ router = APIRouter()
 async def create_invitation(
     data: InvitationCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.invite_teacher")),
 ):
     """
     Crea una invitación de 48h para que un nuevo usuario se una a la organización.
@@ -86,7 +86,7 @@ async def create_invitation(
 async def list_invitations(
     only_pending: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.invite_teacher")),
 ):
     """Lista todas las invitaciones de la organización. Filtrar pendientes con ?only_pending=true."""
     if not current_teacher.organization_id:
@@ -107,7 +107,7 @@ async def list_invitations(
 )
 async def list_org_teachers(
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     """Lista todos los teachers de la misma organización."""
     if not current_teacher.organization_id:
@@ -135,7 +135,7 @@ async def update_org_teacher(
     teacher_id: int,
     data: TeacherAdminUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.change_teacher_role")),
 ):
     """
     Permite al org_admin:
@@ -222,7 +222,7 @@ _PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     summary="Ver el esquema de permisos configurables por rol",
 )
 async def get_permissions_schema(
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.configure_permissions")),
 ) -> dict[str, list[PermissionKeyLabel]]:
     """
     Retorna la lista de permisos configurables para cada rol, con sus
@@ -255,7 +255,7 @@ async def get_permissions_schema(
 async def get_teacher_permissions(
     teacher_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.configure_permissions")),
 ) -> dict:
     """
     Retorna los permisos efectivos del teacher indicado.
@@ -325,7 +325,7 @@ class BranchUpdate(BaseModel):
 async def create_branch(
     data: BranchCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -352,7 +352,7 @@ async def create_branch(
 async def list_branches(
     include_inactive: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         return []
@@ -377,7 +377,7 @@ async def update_branch(
     branch_id: int,
     data: BranchUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -447,7 +447,7 @@ async def create_room(
     branch_id: int,
     data: RoomCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -489,7 +489,7 @@ async def create_room(
 async def list_branch_rooms(
     branch_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         return []
@@ -511,7 +511,7 @@ async def list_branch_rooms(
 )
 async def list_org_rooms(
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         return []
@@ -534,7 +534,7 @@ async def update_room(
     room_id: int,
     data: RoomUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -603,7 +603,7 @@ class RoomAssignmentResponse(BaseModel):
 async def create_room_assignment(
     data: RoomAssignmentCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -674,7 +674,7 @@ async def list_room_assignments(
     teacher_id: int | None = None,
     room_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         return []
@@ -706,7 +706,7 @@ async def list_room_assignments(
 async def close_room_assignment(
     assignment_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -765,7 +765,7 @@ class RoomOverrideResponse(BaseModel):
 async def create_room_override(
     data: RoomOverrideCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -835,7 +835,7 @@ async def list_room_overrides(
     teacher_id: int | None = None,
     room_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         return []
@@ -874,7 +874,7 @@ async def list_room_overrides(
 async def delete_room_override(
     override_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -926,7 +926,7 @@ async def get_room_availability(
     time: str,
     duration: int = Query(..., gt=0),
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         return []
@@ -1015,7 +1015,7 @@ async def update_teacher_permissions(
     teacher_id: int,
     data: TeacherPermissionsUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.configure_permissions")),
 ) -> dict:
     """
     Actualiza los custom_permissions de un teacher específico.
@@ -1249,7 +1249,7 @@ async def _load_students_for_organization(db: AsyncSession, student_ids: list[in
 async def create_event(
     data: EventCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -1334,7 +1334,7 @@ async def list_events(
     teacher_id: int | None = None,
     upcoming_only: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         return []
@@ -1380,7 +1380,7 @@ async def list_events(
 async def get_event(
     event_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -1412,7 +1412,7 @@ async def update_event(
     event_id: int,
     data: EventUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -1515,7 +1515,7 @@ async def update_event(
 async def delete_event(
     event_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -1548,7 +1548,7 @@ async def delete_event(
 async def get_event_calendar_emails(
     event_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_role("org_admin")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(

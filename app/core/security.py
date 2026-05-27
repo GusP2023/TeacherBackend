@@ -321,6 +321,28 @@ def require_role(*allowed_roles: str):
     return _check
 
 
+def require_permission(permission: str):
+    """
+    Dependency que verifica que el teacher autenticado tenga un permiso específico
+    según sus permisos resueltos (defaults del rol + custom_permissions).
+    Reemplaza require_role() como mecanismo principal de autorización.
+    """
+    async def _check(current_teacher=Depends(get_current_teacher)):
+        from app.core.permissions import resolve_permissions
+        perms = resolve_permissions(
+            current_teacher.role,
+            current_teacher.organization_id,
+            current_teacher.custom_permissions,
+        )
+        if not perms.get(permission, False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permiso requerido: {permission}",
+            )
+        return current_teacher
+    return _check
+
+
 async def get_current_teacher_ws(
     token: str,
     db: AsyncSession = Depends(get_db)

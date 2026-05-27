@@ -3,13 +3,21 @@ Students endpoints - CRUD completo para alumnos
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.security import get_current_teacher
 from app.crud import student
+from app.models.class_model import Class, ClassStatus, ClassType
+from app.models.enrollment import Enrollment
 from app.models.teacher import Teacher
-from app.schemas.student import StudentCreate, StudentUpdate, StudentResponse
+from app.schemas.student import (
+    StudentCreate,
+    StudentHistoryItem,
+    StudentResponse,
+)
 from app.api.v1.websocket import notify_data_change
 
 router = APIRouter()
@@ -111,6 +119,83 @@ async def get_student(
         )
     
     return student_obj
+
+
+@router.get("/{student_id}/history", response_model=list[StudentHistoryItem])
+async def get_student_history(
+    student_id: int,
+    limit: int = Query(30, ge=1, le=100, description="Cantidad máxima de clases a retornar"),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """
+    Obtener el historial de clases recientes de un alumno.
+
+    Retorna las últimas clases del alumno ordenadas por fecha descendente,
+    con el instrumento, el estado de asistencia y notas si existen.
+    """
+    student_obj = await student.get(db, student_id)
+
+    if not student_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Alumno {student_id} no encontrado"
+        )
+
+    if student_obj.teacher_id != current_teacher.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para ver el historial de este alumno"
+        )
+
+    result = await db.execute(
+        select(Class)
+        .join(Class.enrollment)
+        .options(
+            selectinload(Class.enrollment).selectinload(Enrollment.instrument),
+            selectinload(Class.attendance)
+        )
+        .where(Enrollment.student_id == student_id)
+        .order_by(Class.date.desc(), Class.time.desc())
+        .limit(limit)
+    )
+
+    classes = result.scalars().all()
+    history = []
+
+    for class_obj in classes:
+        attendance_obj = getattr(class_obj, "attendance", None)
+        status_value = None
+
+        if attendance_obj is not None:
+            status_value = attendance_obj.status.value
+        elif class_obj.type == ClassType.RECOVERY:
+            status_value = class_obj.type.value
+        else:
+            status_value = class_obj.status.value
+
+        notes_value = None
+        if attendance_obj is not None and attendance_obj.notes:
+            notes_value = attendance_obj.notes
+        elif class_obj.notes:
+            notes_value = class_obj.notes
+
+        history.append(
+            StudentHistoryItem(
+                class_id=class_obj.id,
+                date=class_obj.date,
+                enrollment_id=class_obj.enrollment_id,
+                instrument=(
+                    class_obj.enrollment.instrument.name
+                    if class_obj.enrollment is not None and class_obj.enrollment.instrument is not None
+                    else ""
+                ),
+                status=status_value,
+                notes=notes_value,
+            )
+        )
+
+    return history
 
 
 @router.patch("/{student_id}", response_model=StudentResponse)
