@@ -23,10 +23,10 @@ from app.api.v1.websocket import notify_data_change
 import logging
 
 # Prefer the server-managed loggers so messages appear under gunicorn/uvicorn
+# Use the server logger but do NOT raise its level here; keep our logs at DEBUG
 logger = logging.getLogger("uvicorn.error")
 if not logger.handlers:
     logger = logging.getLogger("gunicorn.error")
-logger.setLevel(logging.INFO)
 
 router = APIRouter()
 
@@ -188,7 +188,7 @@ async def get_student_history(
         elif class_obj.notes:
             notes_value = class_obj.notes
 
-        logger.info('history class_obj.time=%s class_id=%s class_type=%s attendance=%s', repr(class_obj.time), class_obj.id, getattr(class_obj, 'type', None), bool(attendance_obj))
+        logger.debug('history class_obj.time=%s class_id=%s class_type=%s attendance=%s', repr(class_obj.time), class_obj.id, getattr(class_obj, 'type', None), bool(attendance_obj))
 
         history.append(
             StudentHistoryItem(
@@ -214,7 +214,7 @@ async def get_student_history(
         # Fallback: best-effort repr
         payload = [repr(h) for h in history]
 
-    logger.info('returning history payload count=%s payload=%s', len(payload), payload)
+    logger.debug('returning history payload count=%s payload=%s', len(payload), payload)
 
     return history
 
