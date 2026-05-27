@@ -73,6 +73,7 @@ class StudentResponse(StudentBase):
     - id: identificador único del alumno
     - teacher_id: a qué profesor pertenece
     - sync_id: para sincronización móvil (puede ser None)
+    - active: indica si el alumno está activo
     - created_at/updated_at: timestamps automáticos
     
     ConfigDict(from_attributes=True):
@@ -81,6 +82,7 @@ class StudentResponse(StudentBase):
     """
     id: int
     teacher_id: int
+    active: bool
     sync_id: str | None = None
     created_at: datetime
     updated_at: datetime
