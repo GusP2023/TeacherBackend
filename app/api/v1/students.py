@@ -170,9 +170,9 @@ async def get_student_history(
 
         if attendance_obj is not None:
             status_value = attendance_obj.status.value
-        elif class_obj.type == ClassType.RECOVERY:
-            status_value = class_obj.type.value
         else:
+            # Use the class status when there's no attendance record.
+            # Avoid using class_type as the status value (it hides present/absent).
             status_value = class_obj.status.value
 
         notes_value = None
