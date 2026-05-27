@@ -18,6 +18,7 @@ from app.core.security import get_current_teacher
 from app.crud import enrollment, student, instrument
 from app.models.teacher import Teacher
 from app.api.v1.websocket import notify_data_change
+from sqlalchemy import select
 from app.schemas.enrollment import (
     EnrollmentCreate,
     EnrollmentUpdate,
@@ -120,11 +121,21 @@ async def get_student_enrollments(
             detail=f"Alumno {student_id} no encontrado"
         )
     
-    if student_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para ver este alumno"
-        )
+    result = await db.execute(select(Teacher).where(Teacher.id == student_obj.teacher_id))
+    student_teacher = result.scalar_one_or_none()
+    
+    if current_teacher.organization_id:
+        if not student_teacher or student_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver este alumno"
+            )
+    else:
+        if student_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver este alumno"
+            )
     
     enrollments = await enrollment.get_by_student(db, student_id)
     return enrollments
