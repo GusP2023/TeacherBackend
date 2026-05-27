@@ -94,7 +94,7 @@ class StudentHistoryItem(BaseModel):
     """Item de historial de clases para un alumno."""
     class_id: int
     date: date
-    time: time
+    time: str | None
     class_type: str
     enrollment_id: int
     instrument: str

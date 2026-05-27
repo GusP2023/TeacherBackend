@@ -181,11 +181,13 @@ async def get_student_history(
         elif class_obj.notes:
             notes_value = class_obj.notes
 
+        print('history class_obj.time=', repr(class_obj.time))
+
         history.append(
             StudentHistoryItem(
                 class_id=class_obj.id,
                 date=class_obj.date,
-                time=class_obj.time,
+                time=class_obj.time.strftime('%H:%M:%S') if class_obj.time else None,
                 class_type=class_obj.type.value,
                 enrollment_id=class_obj.enrollment_id,
                 instrument=(
