@@ -185,6 +185,7 @@ async def get_student_history(
             StudentHistoryItem(
                 class_id=class_obj.id,
                 date=class_obj.date,
+                time=class_obj.time,
                 enrollment_id=class_obj.enrollment_id,
                 instrument=(
                     class_obj.enrollment.instrument.name

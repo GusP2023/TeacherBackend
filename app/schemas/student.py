@@ -8,7 +8,7 @@ CONCEPTOS CLAVE:
 - date: Tipo de dato para fechas (sin hora)
 - | None: Significa "opcional" (puede ser None/null)
 """
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 
