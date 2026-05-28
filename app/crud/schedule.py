@@ -202,7 +202,11 @@ async def check_schedule_conflict(
 
             # Si ambos son GRUPALES con el mismo horario EXACTO, NO es conflicto
             # (permitir múltiples alumnos en el mismo slot grupal)
-            if current_format == ClassFormat.GROUP:
+            
+            # Normalizar current_format para comparación
+            curr_fmt_val = current_format.value if hasattr(current_format, 'value') else current_format
+            
+            if curr_fmt_val == "group":
                 existing_enrollment = existing.enrollment
                 if not existing_enrollment and existing.enrollment_id is not None:
                     result_enrollment = await db.execute(
@@ -212,20 +216,24 @@ async def check_schedule_conflict(
 
                 if existing_enrollment:
                     existing_format = existing_enrollment.format
-                    logger.info(f"  → Formato actual: {current_format}, Formato existente: {existing_format}")
+                    exist_fmt_val = existing_format.value if hasattr(existing_format, 'value') else existing_format
+                    
+                    logger.info(f"  → Formato actual: {curr_fmt_val}, Formato existente: {exist_fmt_val}")
 
-                    # Mismo horario exacto (mismo inicio y duración)
+                    # Mismo horario exacto: Comparamos hora y minuto (ignoramos segundos/microsegundos)
                     is_exact_match = (
-                        time_obj == existing_start and
+                        time_obj.hour == existing_start.hour and
+                        time_obj.minute == existing_start.minute and
                         duration == existing.duration
                     )
-                    logger.info(f"  → ¿Mismo horario exacto? {is_exact_match} (time: {time_obj}=={existing_start}, duration: {duration}=={existing.duration})")
+                    
+                    logger.info(f"  → ¿Mismo horario exacto? {is_exact_match} (time: {time_obj.hour}:{time_obj.minute}=={existing_start.hour}:{existing_start.minute}, duration: {duration}=={existing.duration})")
 
-                    if existing_format == ClassFormat.GROUP and is_exact_match:
+                    if exist_fmt_val == "group" and is_exact_match:
                         logger.info(f"  ✓ Ambos son GRUPALES en el mismo slot - NO es conflicto")
                         continue  # No es conflicto, pueden compartir slot
                     else:
-                        logger.warning(f"  ✗ No cumplen condiciones para compartir slot")
+                        logger.warning(f"  ✗ No cumplen condiciones para compartir slot. (Mismo formato: {exist_fmt_val == 'group'}, Mismo horario: {is_exact_match})")
                 else:
                     logger.warning("  ✗ No se pudo determinar el formato del enrollment existente")
 
