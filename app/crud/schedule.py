@@ -171,6 +171,11 @@ async def check_schedule_conflict(
     if exclude_schedule_id:
         query = query.where(Schedule.id != exclude_schedule_id)
 
+    # Solo considerar schedules cuyo enrollment activo está vigente.
+    query = query.join(Enrollment, Schedule.enrollment_id == Enrollment.id).where(
+        Enrollment.status == EnrollmentStatus.ACTIVE
+    )
+
     result = await db.execute(query)
     existing_schedules = result.scalars().all()
 
