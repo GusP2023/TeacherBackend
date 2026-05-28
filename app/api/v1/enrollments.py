@@ -102,7 +102,16 @@ async def create_enrollment(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="No tienes permiso para inscribir este alumno"
             )
-        enrollment_data.teacher_id = student_obj.teacher_id
+
+        if enrollment_data.teacher_id is not None:
+            selected_teacher = await db.get(Teacher, enrollment_data.teacher_id)
+            if not selected_teacher or selected_teacher.organization_id != current_teacher.organization_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No tienes permiso para crear una inscripción para el profesor seleccionado"
+                )
+        else:
+            enrollment_data.teacher_id = student_obj.teacher_id
     else:
         if student_obj.teacher_id != current_teacher.id:
             raise HTTPException(

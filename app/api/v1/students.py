@@ -82,11 +82,25 @@ async def create_student(
     Returns:
         Alumno creado con id asignado
     """
-    # Asignar el teacher_id del profesor logueado
-    student_data.teacher_id = current_teacher.id
-    
+    # Si el profesor pertenece a una organización, permitir crear un alumno
+    # para cualquier profesor de la misma organización cuando se provea teacher_id.
+    if current_teacher.organization_id:
+        if student_data.teacher_id is not None:
+            result = await db.execute(select(Teacher).where(Teacher.id == student_data.teacher_id))
+            target_teacher = result.scalar_one_or_none()
+            if not target_teacher or target_teacher.organization_id != current_teacher.organization_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No tienes permiso para asignar este alumno al profesor seleccionado"
+                )
+        else:
+            student_data.teacher_id = current_teacher.id
+    else:
+        # Profesor independiente solo puede crear alumnos para sí mismo
+        student_data.teacher_id = current_teacher.id
+
     new_student = await student.create(db, student_data)
-    await notify_data_change(current_teacher.id, "student", "create", new_student.id)
+    await notify_data_change(new_student.teacher_id, "student", "create", new_student.id)
     
     return new_student
 
