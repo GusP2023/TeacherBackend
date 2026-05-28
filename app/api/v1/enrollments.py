@@ -135,11 +135,12 @@ async def create_enrollment(
             detail=f"El instrumento '{instrument_obj.name}' no está disponible"
         )
     
-    # Asignar el teacher_id del profesor logueado
-    enrollment_data.teacher_id = current_teacher.id
-    
+    # NO sobrescribir teacher_id aquí: ya fue validado arriba
+    # Si el admin seleccionó un profesor válido, se respeta ese teacher_id
+    # Si no, ya fue asignado correctamente arriba
+
     new_enrollment = await enrollment.create(db, enrollment_data)
-    await notify_data_change(current_teacher.id, "enrollment", "create", new_enrollment.id)
+    await notify_data_change(enrollment_data.teacher_id, "enrollment", "create", new_enrollment.id)
     return new_enrollment
 
 
