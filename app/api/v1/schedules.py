@@ -33,6 +33,7 @@ class SlotValidationResponse(BaseModel):
 async def list_schedules(
     skip: int = Query(0, ge=0, description="Registros a saltar"),
     limit: int = Query(100, ge=1, le=100, description="Máximo de registros"),
+    teacher_id: int | None = Query(None, description="ID del profesor para filtrar horarios"),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
@@ -50,9 +51,26 @@ async def list_schedules(
     Returns:
         Lista de horarios (templates recurrentes) del profesor
     """
+    if teacher_id is not None:
+        if current_teacher.organization_id:
+            teacher_obj = await db.get(Teacher, teacher_id)
+            if not teacher_obj or teacher_obj.organization_id != current_teacher.organization_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No tienes permiso para ver los horarios de este profesor"
+                )
+        elif teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver los horarios de otro profesor"
+            )
+        target_teacher_id = teacher_id
+    else:
+        target_teacher_id = current_teacher.id
+
     schedules = await schedule.get_multi(
         db,
-        teacher_id=current_teacher.id,
+        teacher_id=target_teacher_id,
         skip=skip,
         limit=limit
     )
@@ -65,6 +83,7 @@ async def validate_slot(
     day: str = Query(..., description="Día de la semana (monday, tuesday, etc)"),
     time: str = Query(..., description="Hora (ej: 15:00)"),
     format: str = Query(..., description="Formato (individual o group)"),
+    teacher_id: int | None = Query(None, description="ID del profesor a validar. Si no se provee, usa el profesor autenticado"),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
@@ -111,7 +130,7 @@ async def validate_slot(
     # Validar disponibilidad
     result = await schedule.validate_slot_availability(
         db,
-        teacher_id=current_teacher.id,
+        teacher_id=teacher_id or current_teacher.id,
         day=day,
         time=time,
         format=class_format
@@ -238,15 +257,22 @@ async def create_schedule(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Inscripción {schedule_data.enrollment_id} no encontrada"
         )
-    
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para crear horarios en esta inscripción"
-        )
-    
-    # Asignar el teacher_id del profesor logueado
-    schedule_data.teacher_id = current_teacher.id
+
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para crear horarios en esta inscripción"
+            )
+        schedule_data.teacher_id = enrollment_obj.teacher_id
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para crear horarios en esta inscripción"
+            )
+        schedule_data.teacher_id = current_teacher.id
 
     # Crear el horario (con validación de conflictos)
     try:

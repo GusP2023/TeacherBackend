@@ -48,13 +48,31 @@ router = APIRouter()
 async def list_enrollments(
     skip: int = Query(0, ge=0, description="Registros a saltar"),
     limit: int = Query(100, ge=1, le=100, description="Máximo de registros"),
+    teacher_id: int | None = Query(None, description="ID del profesor para filtrar inscripciones"),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
-    """Listar todas las inscripciones del profesor"""
+    """Listar todas las inscripciones del profesor o de un profesor específico en la misma organización"""
+    if teacher_id is not None:
+        if current_teacher.organization_id:
+            teacher_obj = await db.get(Teacher, teacher_id)
+            if not teacher_obj or teacher_obj.organization_id != current_teacher.organization_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No tienes permiso para ver las inscripciones de este profesor"
+                )
+        elif teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver las inscripciones de otro profesor"
+            )
+        target_teacher_id = teacher_id
+    else:
+        target_teacher_id = current_teacher.id
+
     enrollments = await enrollment.get_multi(
         db,
-        teacher_id=current_teacher.id,
+        teacher_id=target_teacher_id,
         skip=skip,
         limit=limit
     )
@@ -76,13 +94,23 @@ async def create_enrollment(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Alumno {enrollment_data.student_id} no encontrado"
         )
-    
-    if student_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para inscribir este alumno"
-        )
-    
+
+    if current_teacher.organization_id:
+        student_teacher = await db.get(Teacher, student_obj.teacher_id)
+        if not student_teacher or student_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para inscribir este alumno"
+            )
+        enrollment_data.teacher_id = student_obj.teacher_id
+    else:
+        if student_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para inscribir este alumno"
+            )
+        enrollment_data.teacher_id = current_teacher.id
+
     # Validar que el instrumento existe y está activo
     instrument_obj = await instrument.get(db, enrollment_data.instrument_id)
     
