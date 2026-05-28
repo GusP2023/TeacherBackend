@@ -283,7 +283,7 @@ async def create_schedule(
             detail=str(e)
         )
 
-    await notify_data_change(current_teacher.id, "schedule", "create", new_schedule.id)
+    await notify_data_change(new_schedule.teacher_id, "schedule", "create", new_schedule.id)
     return new_schedule
 
 
@@ -421,7 +421,7 @@ async def update_schedule(
             detail=str(e)
         )
 
-    await notify_data_change(current_teacher.id, "schedule", "update", updated_schedule.id)
+    await notify_data_change(updated_schedule.teacher_id, "schedule", "update", updated_schedule.id)
     return updated_schedule
 
 
@@ -481,7 +481,7 @@ async def remove_schedule_with_date(
             schedule_id=schedule_id,
             remove_from=data.remove_from
         )
-        await notify_data_change(current_teacher.id, "schedule", "remove", result["schedule_id"])
+        await notify_data_change(schedule_obj.teacher_id, "schedule", "remove", result["schedule_id"])
         
         return {
             "schedule_id": result["schedule_id"],
@@ -582,7 +582,7 @@ async def change_schedule_endpoint(
         )
 
         # Notify teacher about schedule change (new schedule created)
-        await notify_data_change(current_teacher.id, "schedule", "change", result["new_schedule_id"])
+        await notify_data_change(schedule_obj.teacher_id, "schedule", "change", result["new_schedule_id"])
 
         return ChangeScheduleResponse(
             old_schedule_id=result["old_schedule_id"],
