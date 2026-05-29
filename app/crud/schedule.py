@@ -303,7 +303,7 @@ async def create(db: AsyncSession, schedule_data: ScheduleCreate) -> Schedule:
         stats = await generate_classes_for_enrollment(
             db,
             enrollment_id=schedule_data.enrollment_id,
-            months_ahead=1,  # Mes actual + 1 mes siguiente = 2 meses
+            months_ahead=2,  # Generar hasta fin de mes + 2 meses (consistente con reactivaciones)
             from_date=schedule.valid_from  # 🔥 USAR VALID_FROM para incluir primera clase
         )
         logger.info(f"Clases generadas: {stats}")
@@ -396,45 +396,21 @@ async def validate_slot_availability(
     teacher_id: int,
     day: str,
     time: str,
-    format: ClassFormat
+    format: ClassFormat,
+    duration: int = 45,
 ) -> dict:
-    """
-    Validar disponibilidad de un slot (día + hora) para un formato específico
+    from datetime import datetime, timedelta
 
-    Reglas:
-    1. Un horario puede ser SOLO individual O SOLO grupal (no mezclar)
-    2. Horarios grupales tienen límite de MAX_GROUP_CLASS_SIZE alumnos
-    3. Horarios individuales tienen límite de 1 alumno
-
-    Args:
-        db: Sesión de base de datos
-        teacher_id: ID del profesor
-        day: Día de la semana (monday, tuesday, etc)
-        time: Hora (ej: "15:00:00" o "15:00")
-        format: Formato deseado (individual o group)
-
-    Returns:
-        dict con:
-        - available: bool (True si se puede inscribir)
-        - message: str (mensaje para mostrar al usuario)
-        - current_students: int (cuántos alumnos hay actualmente)
-        - max_students: int (capacidad máxima del slot)
-        - existing_format: str | None (formato actual del slot si ya existe)
-        - conflict: bool (True si hay conflicto de formato)
-    """
-    from datetime import datetime
-
-    # Convertir time string a objeto time de Python
     if isinstance(time, str):
-        # Normalizar: agregar segundos si faltan
-        if len(time) == 5:  # "15:00"
+        if len(time) == 5:
             time = f"{time}:00"
-        # Convertir a objeto time
         time_obj = datetime.strptime(time, "%H:%M:%S").time()
     else:
         time_obj = time
 
-    # Buscar schedules en este slot con enrollments cargados
+    new_start = time_obj
+    new_end = (datetime.combine(datetime.today(), time_obj) + timedelta(minutes=duration)).time()
+
     result = await db.execute(
         select(Schedule)
         .options(selectinload(Schedule.enrollment))
@@ -443,9 +419,8 @@ async def validate_slot_availability(
             and_(
                 Schedule.teacher_id == teacher_id,
                 Schedule.day == day,
-                Schedule.time == time_obj,  # Usar objeto time, no string
                 Schedule.active == True,
-                Enrollment.status == EnrollmentStatus.ACTIVE,  # Solo contar enrollments activos
+                Enrollment.status == EnrollmentStatus.ACTIVE,
                 or_(
                     Schedule.valid_until == None,
                     Schedule.valid_until >= datetime.today().date()
@@ -453,10 +428,16 @@ async def validate_slot_availability(
             )
         )
     )
-    schedules = result.scalars().all()
+    all_day_schedules = result.scalars().all()
 
-    # Si el slot está vacío, está disponible
-    if not schedules:
+    overlapping = []
+    for s in all_day_schedules:
+        s_start = s.time
+        s_end = (datetime.combine(datetime.today(), s_start) + timedelta(minutes=s.duration)).time()
+        if new_start < s_end and new_end > s_start:
+            overlapping.append(s)
+
+    if not overlapping:
         max_capacity = settings.MAX_GROUP_CLASS_SIZE if format == ClassFormat.GROUP else 1
         return {
             "available": True,
@@ -467,38 +448,45 @@ async def validate_slot_availability(
             "conflict": False
         }
 
-    # Obtener formato del primer schedule (todos deben tener el mismo)
-    # El formato está en el Enrollment, no en Schedule
-    first_schedule = schedules[0]
+    exact_matches = [s for s in overlapping if s.time == time_obj and s.duration == duration]
+    partial_overlaps = [s for s in overlapping if not (s.time == time_obj and s.duration == duration)]
 
-    # Acceder al enrollment que ya fue cargado con selectinload
-    if not first_schedule.enrollment:
-        # Fallback: cargar enrollment si no está disponible
-        result = await db.execute(
-            select(Enrollment).where(Enrollment.id == first_schedule.enrollment_id)
-        )
-        first_enrollment = result.scalar_one()
-        existing_format = first_enrollment.format
-    else:
-        existing_format = first_schedule.enrollment.format
+    if partial_overlaps:
+        first = partial_overlaps[0]
+        enrollment_obj = first.enrollment or (await db.execute(
+            select(Enrollment).where(Enrollment.id == first.enrollment_id)
+        )).scalar_one()
+        overlap_start = first.time.strftime('%H:%M')
+        overlap_end = (datetime.combine(datetime.today(), first.time) + timedelta(minutes=first.duration)).strftime('%H:%M')
+        return {
+            "available": False,
+            "message": f"Conflicto con clase de {overlap_start} a {overlap_end}",
+            "current_students": len(overlapping),
+            "max_students": settings.MAX_GROUP_CLASS_SIZE if format == ClassFormat.GROUP else 1,
+            "existing_format": enrollment_obj.format.value,
+            "conflict": True
+        }
 
-    # Verificar conflicto de formato
+    first = exact_matches[0]
+    existing_enrollment = first.enrollment or (await db.execute(
+        select(Enrollment).where(Enrollment.id == first.enrollment_id)
+    )).scalar_one()
+    existing_format = existing_enrollment.format
+
     if existing_format != format:
         format_name = "individual" if existing_format == ClassFormat.INDIVIDUAL else "grupal"
         return {
             "available": False,
-            "message": f"Este horario es {format_name}",
-            "current_students": len(schedules),
+            "message": f"Este horario ya existe como {format_name}",
+            "current_students": len(exact_matches),
             "max_students": settings.MAX_GROUP_CLASS_SIZE if existing_format == ClassFormat.GROUP else 1,
             "existing_format": existing_format.value,
             "conflict": True
         }
 
-    # Mismo formato, verificar capacidad
-    current_count = len(schedules)
+    current_count = len(exact_matches)
 
     if existing_format == ClassFormat.INDIVIDUAL:
-        # Individual: máximo 1 alumno
         return {
             "available": False,
             "message": "Horario individual ocupado",
@@ -508,9 +496,7 @@ async def validate_slot_availability(
             "conflict": False
         }
 
-    # Grupal: verificar capacidad
     max_capacity = settings.MAX_GROUP_CLASS_SIZE
-
     if current_count >= max_capacity:
         return {
             "available": False,
@@ -521,7 +507,6 @@ async def validate_slot_availability(
             "conflict": False
         }
 
-    # Hay espacio disponible en grupal
     return {
         "available": True,
         "message": f"Horario Grupal con {current_count}/{max_capacity} alumnos",

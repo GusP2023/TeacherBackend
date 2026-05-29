@@ -84,6 +84,7 @@ async def validate_slot(
     time: str = Query(..., description="Hora (ej: 15:00)"),
     format: str = Query(..., description="Formato (individual o group)"),
     teacher_id: int | None = Query(None, description="ID del profesor a validar. Si no se provee, usa el profesor autenticado"),
+    duration: int = Query(45, ge=1, description="Duración de la clase en minutos (default: 45)"),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
@@ -133,7 +134,8 @@ async def validate_slot(
         teacher_id=teacher_id or current_teacher.id,
         day=day,
         time=time,
-        format=class_format
+        format=class_format,
+        duration=duration
     )
 
     return result
