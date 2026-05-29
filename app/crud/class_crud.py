@@ -214,6 +214,14 @@ async def create_recovery(
     # Crear la clase de recuperación
     class_dict = class_data.model_dump()
     class_dict['type'] = ClassType.RECOVERY  # Forzar type='recovery'
+
+    # Si el enrollment todavía tiene partial_sessions activas, moverlas a la clase de recuperación.
+    partial_sessions = class_dict.get('partial_sessions') or []
+    if not partial_sessions and enrollment.partial_sessions:
+        partial_sessions = enrollment.partial_sessions
+    class_dict['partial_sessions'] = partial_sessions
+    enrollment.partial_sessions = []
+
     class_obj = Class(**class_dict)
     
     # Descontar crédito

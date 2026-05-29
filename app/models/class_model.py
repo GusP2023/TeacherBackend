@@ -36,7 +36,7 @@ Formatos:
 """
 
 from datetime import date, time
-from sqlalchemy import Integer, Date, Time, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Integer, Date, Time, ForeignKey, Enum as SQLEnum, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import TYPE_CHECKING
 import enum
@@ -212,6 +212,14 @@ class Class(Base, TimestampMixin):
         default=45,
         nullable=False,
         comment="Duración en minutos (heredado de Schedule o manual)"
+    )
+
+    partial_sessions: Mapped[list[dict]] = mapped_column(
+        JSON,
+        default=list,
+        nullable=False,
+        server_default='[]',
+        comment="Array de sesiones parciales de recuperación: [{date: 'YYYY-MM-DD', time: 'HH:MM', minutes: 15|30}]"
     )
     
     # ========================================

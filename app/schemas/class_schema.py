@@ -18,7 +18,7 @@ ENUMS:
 - type: regular (generada desde schedule), recovery (recuperación)
 - format: individual (1 alumno), group (varios alumnos)
 """
-from typing import Optional
+from typing import Optional, List
 from datetime import date, datetime, time
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -81,7 +81,11 @@ class ClassBase(BaseModel):
     type: ClassType = ClassType.REGULAR
     format: ClassFormat = ClassFormat.INDIVIDUAL
     notes: str | None = None
-    
+    partial_sessions: List[dict] = Field(
+        default_factory=list,
+        description="Array de sesiones parciales de recuperación: [{date: 'YYYY-MM-DD', time: 'HH:MM', minutes: 15|30}]"
+    )
+
 
 class ClassCreate(ClassBase):
     """
