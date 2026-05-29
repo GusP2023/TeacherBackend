@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import date
 from typing import Optional
+import re
+from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.core.security import get_current_teacher
@@ -796,6 +798,172 @@ async def withdraw_enrollment(
         classes_deleted=result["classes_deleted"],
         message=f"Inscripción retirada definitivamente. Se eliminaron {result['classes_deleted']} clases futuras."
     )
+
+
+class PartialRecoverySession(BaseModel):
+    date: str
+    time: str
+    minutes: int
+
+
+@router.post("/{enrollment_id}/partial-recovery", response_model=EnrollmentResponse)
+async def add_partial_recovery(
+    enrollment_id: int,
+    session: PartialRecoverySession,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """Agregar una sesión parcial de recuperación al enrollment."""
+    enrollment_obj = await enrollment.get(db, enrollment_id)
+    if not enrollment_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Inscripción {enrollment_id} no encontrada"
+        )
+    if enrollment_obj.teacher_id != current_teacher.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para modificar esta inscripción"
+        )
+
+    date_str = session.date
+    time_str = session.time
+    minutes = session.minutes
+
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El campo 'date' debe tener el formato YYYY-MM-DD"
+        )
+    try:
+        date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El campo 'date' no es una fecha válida"
+        )
+
+    if not re.fullmatch(r"^(?:[01]\d|2[0-3]):[0-5]\d$", time_str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El campo 'time' debe tener el formato HH:MM válido"
+        )
+
+    if not isinstance(minutes, int) or minutes < 1 or minutes > 44:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El campo 'minutes' debe ser un entero entre 1 y 44"
+        )
+
+    current_sessions = enrollment_obj.partial_sessions or []
+    total_minutes = sum((s.get("minutes") or 0) for s in current_sessions) + minutes
+    if total_minutes > 45:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El total acumulado supera los 45 minutos"
+        )
+
+    for existing in current_sessions:
+        if (
+            existing.get("date") == date_str and
+            existing.get("time") == time_str and
+            existing.get("minutes") == minutes
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Ya existe una sesión parcial idéntica"
+            )
+
+    success = await enrollment.add_partial_session(
+        db,
+        enrollment_id,
+        {"date": date_str, "time": time_str, "minutes": minutes}
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo agregar la sesión parcial"
+        )
+
+    updated_enrollment = await enrollment.get(db, enrollment_id)
+    await notify_data_change(current_teacher.id, "enrollment", "update", enrollment_id)
+    return updated_enrollment
+
+
+@router.delete("/{enrollment_id}/partial-recovery/{session_index}", response_model=EnrollmentResponse)
+async def delete_partial_recovery(
+    enrollment_id: int,
+    session_index: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """Eliminar una sesión parcial de recuperación por índice."""
+    enrollment_obj = await enrollment.get(db, enrollment_id)
+    if not enrollment_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Inscripción {enrollment_id} no encontrada"
+        )
+    if enrollment_obj.teacher_id != current_teacher.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para modificar esta inscripción"
+        )
+
+    current_sessions = enrollment_obj.partial_sessions or []
+    if not current_sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No hay sesiones parciales"
+        )
+    if session_index < 0 or session_index >= len(current_sessions):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Índice fuera de rango"
+        )
+
+    success = await enrollment.remove_partial_session(db, enrollment_id, session_index)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo eliminar la sesión parcial"
+        )
+
+    updated_enrollment = await enrollment.get(db, enrollment_id)
+    await notify_data_change(current_teacher.id, "enrollment", "update", enrollment_id)
+    return updated_enrollment
+
+
+@router.delete("/{enrollment_id}/partial-recoveries", response_model=EnrollmentResponse)
+async def clear_partial_recoveries(
+    enrollment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """Limpiar todas las sesiones parciales de recuperación."""
+    enrollment_obj = await enrollment.get(db, enrollment_id)
+    if not enrollment_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Inscripción {enrollment_id} no encontrada"
+        )
+    if enrollment_obj.teacher_id != current_teacher.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para modificar esta inscripción"
+        )
+
+    success = await enrollment.clear_partial_sessions(db, enrollment_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudieron limpiar las sesiones parciales"
+        )
+
+    updated_enrollment = await enrollment.get(db, enrollment_id)
+    await notify_data_change(current_teacher.id, "enrollment", "update", enrollment_id)
+    return updated_enrollment
 
 
 # ========================================
