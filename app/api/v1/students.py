@@ -168,7 +168,8 @@ async def get_student_history(
     Retorna las últimas clases del alumno ordenadas por fecha descendente,
     con el instrumento, el estado de asistencia y notas si existen.
     """
-    student_obj = await student.get(db, student_id)
+    raw_result = await db.execute(select(Student).where(Student.id == student_id))
+    student_obj = raw_result.scalar_one_or_none()
 
     if not student_obj:
         raise HTTPException(
