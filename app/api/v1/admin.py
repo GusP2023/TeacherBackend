@@ -196,7 +196,7 @@ async def list_org_students(
             birthdate=student.birthdate,
             notes=student.notes,
             sync_id=student.sync_id,
-            active=student.active,
+            active=enrollment_stats.get(student.id, {"count": 0})["count"] > 0,
             created_at=student.created_at,
             updated_at=student.updated_at,
             enrollments_count=enrollment_stats.get(student.id, {"count": 0})["count"],
