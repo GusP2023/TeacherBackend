@@ -322,11 +322,19 @@ async def get_enrollment_schedules(
             detail=f"Inscripción {enrollment_id} no encontrada"
         )
     
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para ver esta inscripción"
-        )
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta inscripción"
+            )
     
     schedules = await schedule.get_by_enrollment(db, enrollment_id)
     
@@ -463,11 +471,19 @@ async def remove_schedule_with_date(
             detail="Horario no encontrado"
         )
     
-    if schedule_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para eliminar este horario"
-        )
+    if current_teacher.organization_id:
+        schedule_teacher = await db.get(Teacher, schedule_obj.teacher_id)
+        if not schedule_teacher or schedule_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para eliminar este horario"
+            )
+    else:
+        if schedule_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para eliminar este horario"
+            )
     
     # Verificar que está activo
     # if not schedule_obj.active:
@@ -560,11 +576,19 @@ async def change_schedule_endpoint(
             detail="Horario no encontrado"
         )
 
-    if schedule_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para modificar este horario"
-        )
+    if current_teacher.organization_id:
+        schedule_teacher = await db.get(Teacher, schedule_obj.teacher_id)
+        if not schedule_teacher or schedule_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para modificar este horario"
+            )
+    else:
+        if schedule_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para modificar este horario"
+            )
 
     # Verificar que está activo
     if not schedule_obj.active:

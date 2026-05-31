@@ -196,11 +196,19 @@ async def get_enrollment(
             detail=f"Inscripción {enrollment_id} no encontrada"
         )
     
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para ver esta inscripción"
-        )
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta inscripción"
+            )
     
     return enrollment_obj
 
@@ -221,11 +229,19 @@ async def update_enrollment(
             detail=f"Inscripción {enrollment_id} no encontrada"
         )
     
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para actualizar esta inscripción"
-        )
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para actualizar esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para actualizar esta inscripción"
+            )
     
     # Detectar si se está reactivando (cambio a ACTIVE)
     # Nota: enrollment_data.status es opcional, puede ser None
@@ -341,11 +357,19 @@ async def delete_enrollment(
             detail=f"Inscripción {enrollment_id} no encontrada"
         )
     
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para eliminar esta inscripción"
-        )
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para eliminar esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para eliminar esta inscripción"
+            )
         
     success = await enrollment.remove(db, enrollment_id)
     
@@ -387,13 +411,10 @@ async def suspend_enrollment_put(
     from app.models.enrollment import Enrollment, EnrollmentStatus
     from sqlalchemy import select, and_
 
-    # Verificar que enrollment existe y pertenece al profesor
+    # Verificar que enrollment existe
     enroll_result = await db.execute(
         select(Enrollment).where(
-            and_(
-                Enrollment.id == enrollment_id,
-                Enrollment.teacher_id == current_teacher.id
-            )
+            Enrollment.id == enrollment_id
         )
     )
     enrollment_obj = enroll_result.scalar_one_or_none()
@@ -403,6 +424,20 @@ async def suspend_enrollment_put(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Enrollment no encontrado"
         )
+
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para realizar esta acción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para realizar esta acción"
+            )
 
     if enrollment_obj.status == EnrollmentStatus.SUSPENDED:
         raise HTTPException(
@@ -487,11 +522,19 @@ async def suspend_enrollment(
             detail=f"Inscripción {enrollment_id} no encontrada"
         )
     
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para suspender esta inscripción"
-        )
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para suspender esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para suspender esta inscripción"
+            )
     
     # Ejecutar suspensión
     result = await enrollment.suspend(
@@ -549,10 +592,7 @@ async def reactivate_enrollment_put(
     # Verificar enrollment
     enroll_result = await db.execute(
         select(Enrollment).where(
-            and_(
-                Enrollment.id == enrollment_id,
-                Enrollment.teacher_id == current_teacher.id
-            )
+            Enrollment.id == enrollment_id
         )
     )
     enrollment_obj = enroll_result.scalar_one_or_none()
@@ -562,6 +602,20 @@ async def reactivate_enrollment_put(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Enrollment no encontrado"
         )
+
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para realizar esta acción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para realizar esta acción"
+            )
 
     if enrollment_obj.status != EnrollmentStatus.SUSPENDED:
         raise HTTPException(
@@ -705,11 +759,19 @@ async def reactivate_enrollment(
             detail=f"Inscripción {enrollment_id} no encontrada"
         )
     
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para reactivar esta inscripción"
-        )
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para reactivar esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para reactivar esta inscripción"
+            )
     
     # Ejecutar reactivación
     result = await enrollment.reactivate(
@@ -772,11 +834,19 @@ async def withdraw_enrollment(
             detail=f"Inscripción {enrollment_id} no encontrada"
         )
     
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para retirar esta inscripción"
-        )
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para retirar esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para retirar esta inscripción"
+            )
     
     # Ejecutar retiro
     result = await enrollment.withdraw(db, enrollment_id)
@@ -820,11 +890,19 @@ async def add_partial_recovery(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Inscripción {enrollment_id} no encontrada"
         )
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para modificar esta inscripción"
-        )
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para modificar esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para modificar esta inscripción"
+            )
 
     date_str = session.date
     time_str = session.time
@@ -905,11 +983,19 @@ async def delete_partial_recovery(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Inscripción {enrollment_id} no encontrada"
         )
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para modificar esta inscripción"
-        )
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para modificar esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para modificar esta inscripción"
+            )
 
     current_sessions = enrollment_obj.partial_sessions or []
     if not current_sessions:
@@ -948,11 +1034,19 @@ async def clear_partial_recoveries(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Inscripción {enrollment_id} no encontrada"
         )
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para modificar esta inscripción"
-        )
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para modificar esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para modificar esta inscripción"
+            )
 
     success = await enrollment.clear_partial_sessions(db, enrollment_id)
     if not success:
@@ -992,11 +1086,19 @@ async def check_schedule_availability(
             detail=f"Inscripción {enrollment_id} no encontrada"
         )
     
-    if enrollment_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para ver esta inscripción"
-        )
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta inscripción"
+            )
     
     conflicts = await enrollment.check_schedule_availability(
         db,
