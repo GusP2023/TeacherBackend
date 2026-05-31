@@ -12,6 +12,7 @@ from app.core.security import get_current_teacher
 from app.crud import student
 from app.models.class_model import Class, ClassStatus, ClassType
 from app.models.enrollment import Enrollment
+from app.models.student import Student
 from app.models.teacher import Teacher
 from app.schemas.student import (
     StudentCreate,
@@ -338,8 +339,9 @@ async def delete_student(
         404: Si el alumno no existe
         403: Si el alumno no pertenece al profesor
     """
-    # Verificar que existe
-    student_obj = await student.get(db, student_id)
+    # Verificar que existe (sin filtrar por active — el admin puede eliminar alumnos inactivos)
+    raw_result = await db.execute(select(Student).where(Student.id == student_id))
+    student_obj = raw_result.scalar_one_or_none()
     
     if not student_obj:
         raise HTTPException(
