@@ -13,7 +13,7 @@ from app.core.security import get_current_teacher
 from app.crud import schedule, enrollment
 from app.models.teacher import Teacher
 from app.models.class_model import ClassFormat
-from app.schemas.schedule import ScheduleCreate, ScheduleUpdate, ScheduleResponse, ChangeScheduleRequest, ChangeScheduleResponse, RemoveScheduleRequest, RemoveScheduleResponse
+from app.schemas.schedule import ScheduleCreate, ScheduleUpdate, ScheduleResponse, ChangeScheduleRequest, ChangeScheduleResponse, ReactivateScheduleRequest, ReactivateScheduleResponse, RemoveScheduleRequest, RemoveScheduleResponse
 from app.api.v1.websocket import notify_data_change
 
 router = APIRouter()
@@ -521,6 +521,63 @@ async def remove_schedule_with_date(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al eliminar horario: {str(e)}"
         )
+
+
+@router.put("/{schedule_id}/reactivate", response_model=ReactivateScheduleResponse)
+async def reactivate_schedule_endpoint(
+    schedule_id: int,
+    data: ReactivateScheduleRequest,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """
+    Reactiva un horario inactivo creando uno nuevo con el mismo día/hora/duración.
+
+    Diferencias con /change:
+    - Acepta schedules con active=False
+    - No elimina clases (no había)
+    - Valida que el slot esté libre desde valid_from
+
+    Errores:
+    - 404: Schedule no encontrado
+    - 403: No pertenece al profesor
+    - 400: Schedule ya activo, o slot ocupado
+    - 500: Error interno
+    """
+    from app.crud.schedule import reactivate_schedule
+
+    schedule_obj = await schedule.get(db, schedule_id)
+
+    if not schedule_obj:
+        raise HTTPException(status_code=404, detail="Horario no encontrado")
+
+    if current_teacher.organization_id:
+        schedule_teacher = await db.get(Teacher, schedule_obj.teacher_id)
+        if not schedule_teacher or schedule_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(status_code=403, detail="No tienes permiso para modificar este horario")
+    else:
+        if schedule_obj.teacher_id != current_teacher.id:
+            raise HTTPException(status_code=403, detail="No tienes permiso para modificar este horario")
+
+    try:
+        result = await reactivate_schedule(
+            db=db,
+            schedule_id=schedule_id,
+            valid_from=data.valid_from
+        )
+        await notify_data_change(schedule_obj.teacher_id, "schedule", "reactivate", result["new_schedule_id"])
+
+        return ReactivateScheduleResponse(
+            old_schedule_id=result["old_schedule_id"],
+            new_schedule_id=result["new_schedule_id"],
+            classes_generated=result["classes_generated"],
+            message="Horario reactivado exitosamente"
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al reactivar horario: {str(e)}")
 
 
 @router.delete("/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)

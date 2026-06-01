@@ -863,6 +863,94 @@ async def check_schedule_availability_dates(
     return conflict_list
 
 
+async def reactivate_schedule(
+    db: AsyncSession,
+    schedule_id: int,
+    valid_from: date
+) -> dict:
+    """
+    Reactiva un horario inactivo creando un nuevo schedule con el mismo día/hora/duración.
+
+    Diferencias con change_schedule:
+    - El schedule original puede estar inactivo (active=False)
+    - No elimina clases (ya no había)
+    - Valida disponibilidad del slot desde valid_from
+    - Si el slot está ocupado, lanza ValueError con detalle de conflictos
+
+    Flujo:
+    1. Obtener schedule original
+    2. Verificar que esté inactivo (si está activo, rechazar — usar change en su lugar)
+    3. Verificar disponibilidad del slot desde valid_from
+    4. Crear nuevo schedule activo (mismo day/time/duration/enrollment/teacher)
+    5. Generar clases desde valid_from
+    6. Commit atómico
+
+    Raises:
+        ValueError: schedule activo, slot ocupado, o error de generación
+    """
+    result = await db.execute(select(Schedule).where(Schedule.id == schedule_id))
+    old_schedule = result.scalar_one_or_none()
+    if not old_schedule:
+        raise ValueError("Horario no encontrado")
+
+    if old_schedule.active:
+        raise ValueError("El horario ya está activo. Usa 'Cambiar horario' en su lugar.")
+
+    conflicts = await check_schedule_availability_dates(
+        db=db,
+        day=old_schedule.day.value,
+        time_str=old_schedule.time.strftime("%H:%M"),
+        teacher_id=old_schedule.teacher_id,
+        from_date=valid_from,
+        exclude_enrollment_id=old_schedule.enrollment_id
+    )
+
+    if conflicts:
+        dates_str = ", ".join(
+            [c["date"].strftime('%d-%b') + f" ({c['student_name']})" for c in conflicts[:3]]
+        )
+        if len(conflicts) > 3:
+            dates_str += f" (y {len(conflicts) - 3} más)"
+        raise ValueError(
+            f"El horario {old_schedule.day.value} {old_schedule.time.strftime('%H:%M')} "
+            f"está ocupado desde {valid_from.strftime('%d/%m/%Y')}: {dates_str}."
+        )
+
+    new_schedule = Schedule(
+        enrollment_id=old_schedule.enrollment_id,
+        teacher_id=old_schedule.teacher_id,
+        day=old_schedule.day,
+        time=old_schedule.time,
+        duration=old_schedule.duration,
+        valid_from=valid_from,
+        valid_until=None,
+        active=True
+    )
+    db.add(new_schedule)
+    await db.flush()
+
+    stats = await generate_classes_for_enrollment(
+        db,
+        enrollment_id=old_schedule.enrollment_id,
+        months_ahead=2,
+        from_date=valid_from
+    )
+
+    if stats.get('error'):
+        msg = f"Generación parcial/errores: {stats.get('error')} - {stats.get('errors', [])}"
+        raise ValueError(msg)
+
+    classes_generated = stats.get("created", 0)
+
+    await db.commit()
+
+    return {
+        "old_schedule_id": schedule_id,
+        "new_schedule_id": new_schedule.id,
+        "classes_generated": classes_generated,
+    }
+
+
 async def change_schedule(
     db: AsyncSession,
     schedule_id: int,

@@ -147,6 +147,17 @@ class ChangeScheduleResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ReactivateScheduleRequest(BaseModel):
+    valid_from: date
+
+
+class ReactivateScheduleResponse(BaseModel):
+    old_schedule_id: int
+    new_schedule_id: int
+    classes_generated: int
+    message: str
+
+
 class RemoveScheduleRequest(BaseModel):
     """Request para eliminar un horario con fecha"""
     remove_from: date = Field(
