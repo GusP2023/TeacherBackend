@@ -153,8 +153,11 @@ async def get_student_enrollments(
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
     """Obtener todas las inscripciones de un alumno"""
-    student_obj = await student.get(db, student_id)
-    
+    # Sin filtrar por active — el admin puede ver inscripciones de alumnos inactivos
+    from app.models.student import Student as StudentModel
+    raw_result = await db.execute(select(StudentModel).where(StudentModel.id == student_id))
+    student_obj = raw_result.scalar_one_or_none()
+
     if not student_obj:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -178,6 +181,13 @@ async def get_student_enrollments(
             )
     
     enrollments = await enrollment.get_by_student(db, student_id)
+
+    # Enriquecer con teacher_name
+    for e in enrollments:
+        if not hasattr(e, 'teacher_name') or e.teacher_name is None:
+            t = await db.get(Teacher, e.teacher_id)
+            e.teacher_name = t.name if t else None
+
     return enrollments
 
 
@@ -243,6 +253,42 @@ async def update_enrollment(
                 detail="No tienes permiso para actualizar esta inscripción"
             )
     
+    # Validar nuevo instrumento si se está cambiando
+    if enrollment_data.instrument_id is not None:
+        instrument_obj = await instrument.get(db, enrollment_data.instrument_id)
+        if not instrument_obj:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Instrumento {enrollment_data.instrument_id} no encontrado"
+            )
+        if not instrument_obj.active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"El instrumento '{instrument_obj.name}' no está disponible"
+            )
+
+    # Validar nuevo profesor si se está cambiando
+    if enrollment_data.teacher_id is not None:
+        new_teacher = await db.get(Teacher, enrollment_data.teacher_id)
+        if not new_teacher:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Profesor {enrollment_data.teacher_id} no encontrado"
+            )
+        if current_teacher.organization_id:
+            if new_teacher.organization_id != current_teacher.organization_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="El profesor seleccionado no pertenece a esta organización"
+                )
+        else:
+            # Profesor independiente no puede reasignar a otro profesor
+            if enrollment_data.teacher_id != current_teacher.id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No tenés permiso para reasignar este enrollment"
+                )
+
     # Detectar si se está reactivando (cambio a ACTIVE)
     # Nota: enrollment_data.status es opcional, puede ser None
     is_reactivating = (
@@ -255,6 +301,17 @@ async def update_enrollment(
     new_enrolled_date = enrollment_data.enrolled_date  # None si no cambió
 
     updated_enrollment = await enrollment.update(db, enrollment_id, enrollment_data)
+
+    # Enriquecer con teacher_name e instrument_name para la respuesta
+    if updated_enrollment is not None:
+        if not hasattr(updated_enrollment, 'teacher_name') or updated_enrollment.teacher_name is None:
+            teacher_obj = await db.get(Teacher, updated_enrollment.teacher_id)
+            if teacher_obj:
+                updated_enrollment.teacher_name = teacher_obj.name
+        if not hasattr(updated_enrollment, 'instrument_name') or updated_enrollment.instrument_name is None:
+            instrument_obj = await instrument.get(db, updated_enrollment.instrument_id)
+            if instrument_obj:
+                updated_enrollment.instrument_name = instrument_obj.name
 
     # Si se reactivó manualmente vía PATCH:
     # 1. Reactivar schedules (asumimos que quiere recuperar su horario anterior)

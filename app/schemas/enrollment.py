@@ -80,6 +80,8 @@ class EnrollmentUpdate(BaseModel):
     withdrawn_date: date | None = None    # Fecha de retiro definitivo
     format: ClassFormat | None = None     # Cambiar formato de clases
     enrolled_date: date | None = None     # Cambiar fecha de inicio de clases
+    instrument_id: int | None = Field(None, gt=0)   # NUEVO
+    teacher_id: int | None = Field(None, gt=0)       # NUEVO
     manual_credit_dates: List[str] | None = Field(
         None,
         description="Array de fechas (YYYY-MM-DD) de créditos agregados manualmente"
@@ -203,6 +205,8 @@ class EnrollmentResponse(EnrollmentBase):
     sync_id: str | None = None
     created_at: datetime
     updated_at: datetime
+    teacher_name: Optional[str] = None    # NUEVO
+    instrument_name: Optional[str] = None # NUEVO
 
     # Permite leer desde objetos SQLAlchemy
     model_config = ConfigDict(from_attributes=True)
