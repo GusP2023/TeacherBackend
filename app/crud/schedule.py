@@ -14,7 +14,7 @@ from app.models.class_model import ClassFormat, Class, ClassType, ClassStatus
 from app.models.student import Student
 from app.schemas.schedule import ScheduleCreate, ScheduleUpdate
 from app.core.config import settings
-from app.jobs.class_generator import generate_classes_for_enrollment
+from app.jobs.class_generator import generate_classes_for_enrollment, _generate_classes_for_schedule
 
 logger = logging.getLogger(__name__)
 
@@ -300,16 +300,21 @@ async def create(db: AsyncSession, schedule_data: ScheduleCreate) -> Schedule:
     # 🔥 GENERAR CLASES AUTOMÁTICAMENTE (mes actual + mes siguiente)
     logger.info(f"Generando clases automáticas para enrollment {schedule_data.enrollment_id}...")
     try:
-        stats = await generate_classes_for_enrollment(
+        enrollment_obj = await db.get(Enrollment, schedule_data.enrollment_id)
+        if not enrollment_obj:
+            raise ValueError("Enrollment no encontrado al generar clases")
+
+        stats = await _generate_classes_for_schedule(
             db,
-            enrollment_id=schedule_data.enrollment_id,
+            schedule,
+            enrollment_obj,
             months_ahead=2,  # Generar hasta fin de mes + 2 meses (consistente con reactivaciones)
-            from_date=schedule.valid_from  # 🔥 USAR VALID_FROM para incluir primera clase
+            from_date=schedule.valid_from
         )
         logger.info(f"Clases generadas: {stats}")
 
-        if stats.get('error'):
-            msg = f"Generación parcial/errores: {stats.get('error')} - {stats.get('errors', [])}"
+        if stats.get('errors'):
+            msg = f"Generación parcial/errores: {stats.get('errors')}"
             logger.error(msg)
             raise ValueError(msg)
 
@@ -413,7 +418,7 @@ async def validate_slot_availability(
 
     result = await db.execute(
         select(Schedule)
-        .options(selectinload(Schedule.enrollment))
+        .options(selectinload(Schedule.enrollment).selectinload(Enrollment.student))
         .join(Enrollment, Schedule.enrollment_id == Enrollment.id)
         .where(
             and_(
@@ -458,9 +463,17 @@ async def validate_slot_availability(
         )).scalar_one()
         overlap_start = first.time.strftime('%H:%M')
         overlap_end = (datetime.combine(datetime.today(), first.time) + timedelta(minutes=first.duration)).strftime('%H:%M')
+        student_name = None
+        if getattr(enrollment_obj, 'student', None):
+            student_name = enrollment_obj.student.name
+        else:
+            student_record = await db.execute(select(Student).where(Student.id == enrollment_obj.student_id))
+            student_record = student_record.scalar_one_or_none()
+            student_name = student_record.name if student_record else None
+        student_suffix = f" de {student_name}" if student_name else ''
         return {
             "available": False,
-            "message": f"Conflicto con clase de {overlap_start} a {overlap_end}",
+            "message": f"Conflicto con clase de {overlap_start} a {overlap_end}{student_suffix}",
             "current_students": len(overlapping),
             "max_students": settings.MAX_GROUP_CLASS_SIZE if format == ClassFormat.GROUP else 1,
             "existing_format": enrollment_obj.format.value,
@@ -487,9 +500,19 @@ async def validate_slot_availability(
     current_count = len(exact_matches)
 
     if existing_format == ClassFormat.INDIVIDUAL:
+        exact_start = first.time.strftime('%H:%M')
+        exact_end = (datetime.combine(datetime.today(), first.time) + timedelta(minutes=first.duration)).strftime('%H:%M')
+        student_name = None
+        if getattr(existing_enrollment, 'student', None):
+            student_name = existing_enrollment.student.name
+        else:
+            student_record = await db.execute(select(Student).where(Student.id == existing_enrollment.student_id))
+            student_record = student_record.scalar_one_or_none()
+            student_name = student_record.name if student_record else None
+        student_suffix = f" de {student_name}" if student_name else ''
         return {
             "available": False,
-            "message": "Horario individual ocupado",
+            "message": f"Conflicto con clase individual de {exact_start} a {exact_end}{student_suffix}",
             "current_students": current_count,
             "max_students": 1,
             "existing_format": existing_format.value,
@@ -929,15 +952,16 @@ async def reactivate_schedule(
     db.add(new_schedule)
     await db.flush()
 
-    stats = await generate_classes_for_enrollment(
-        db,
-        enrollment_id=old_schedule.enrollment_id,
-        months_ahead=2,
-        from_date=valid_from
+    enrollment_obj = await db.get(Enrollment, new_schedule.enrollment_id)
+    if not enrollment_obj:
+        raise ValueError("Enrollment no encontrado al generar clases")
+
+    stats = await _generate_classes_for_schedule(
+        db, new_schedule, enrollment_obj, months_ahead=2, from_date=valid_from
     )
 
-    if stats.get('error'):
-        msg = f"Generación parcial/errores: {stats.get('error')} - {stats.get('errors', [])}"
+    if stats.get('errors'):
+        msg = f"Generación parcial/errores: {stats.get('errors')}"
         raise ValueError(msg)
 
     classes_generated = stats.get("created", 0)
