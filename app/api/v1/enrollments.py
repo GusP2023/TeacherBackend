@@ -406,7 +406,7 @@ async def update_enrollment(
         print(f"✅ [UpdateEnrollment] Clases generadas tras cambio de fecha: {gen_result.get('created', 0)}")
         await db.commit()
 
-    await notify_data_change(current_teacher.id, "enrollment", "update", updated_enrollment.id)
+    await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", updated_enrollment.id)
     return updated_enrollment
 
 
@@ -446,7 +446,7 @@ async def delete_enrollment(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error al eliminar la inscripción"
         )
-    await notify_data_change(current_teacher.id, "enrollment", "delete", enrollment_id)
+    await notify_data_change(enrollment_obj.teacher_id, "enrollment", "delete", enrollment_id)
     return None
 
 
@@ -549,7 +549,7 @@ async def suspend_enrollment_put(
             data.reason
         )
 
-        await notify_data_change(current_teacher.id, "enrollment", "suspend", result.id)
+        await notify_data_change(enrollment_obj.teacher_id, "enrollment", "suspend", result.id)
         return {
             "id": result.id,
             "status": result.status.value,
@@ -783,11 +783,11 @@ async def reactivate_enrollment_put(
             )
 
         # ÉXITO - Enrollment fue reactivado
-        enrollment = result.get("enrollment")
-        await notify_data_change(current_teacher.id, "enrollment", "reactivate", enrollment.id)
+        reactivated_enrollment = result.get("enrollment")
+        await notify_data_change(enrollment_obj.teacher_id, "enrollment", "reactivate", reactivated_enrollment.id)
         return {
-            "id": enrollment.id,
-            "status": enrollment.status.value,
+            "id": reactivated_enrollment.id,
+            "status": reactivated_enrollment.status.value,
             "schedules_created": result.get("schedules_created", 0),
             "classes_generated": result.get("classes_generated", 0),
             "classes_deleted": result.get("classes_deleted", 0),
@@ -928,7 +928,7 @@ async def withdraw_enrollment(
         )
     
     withdrawn = result["enrollment"]
-    await notify_data_change(current_teacher.id, "enrollment", "withdraw", withdrawn.id)
+    await notify_data_change(withdrawn.teacher_id, "enrollment", "withdraw", withdrawn.id)
     
     return EnrollmentSuspendResponse(
         enrollment_id=withdrawn.id,
@@ -1035,7 +1035,7 @@ async def add_partial_recovery(
         )
 
     updated_enrollment = await enrollment.get(db, enrollment_id)
-    await notify_data_change(current_teacher.id, "enrollment", "update", enrollment_id)
+    await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", enrollment_id)
     return updated_enrollment
 
 
@@ -1087,7 +1087,7 @@ async def delete_partial_recovery(
         )
 
     updated_enrollment = await enrollment.get(db, enrollment_id)
-    await notify_data_change(current_teacher.id, "enrollment", "update", enrollment_id)
+    await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", enrollment_id)
     return updated_enrollment
 
 
@@ -1126,7 +1126,7 @@ async def clear_partial_recoveries(
         )
 
     updated_enrollment = await enrollment.get(db, enrollment_id)
-    await notify_data_change(current_teacher.id, "enrollment", "update", enrollment_id)
+    await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", enrollment_id)
     return updated_enrollment
 
 

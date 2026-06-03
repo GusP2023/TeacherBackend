@@ -108,23 +108,34 @@ async def create_class(
         400: Si el enrollment no existe, no pertenece al profesor,
              o falta enrollment_id para type regular/recovery
     """
-    # Asignar el teacher_id del profesor logueado
-    class_data.teacher_id = current_teacher.id
-    
-    # Validar enrollment_id si está presente
+    # Validar teacher_id y enrollment_id según permisos
+    if current_teacher.organization_id:
+        target_teacher = await db.get(Teacher, class_data.teacher_id)
+        if not target_teacher or target_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para asignar esta clase al profesor seleccionado"
+            )
+    else:
+        if class_data.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para asignar esta clase a otro profesor"
+            )
+
     if class_data.enrollment_id is not None:
         enrollment_obj = await enrollment.get(db, class_data.enrollment_id)
-        
+
         if not enrollment_obj:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Inscripción {class_data.enrollment_id} no encontrada"
             )
-        
-        if enrollment_obj.teacher_id != current_teacher.id:
+
+        if class_data.teacher_id != enrollment_obj.teacher_id:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="No tienes permiso para crear clases en esta inscripción"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El profesor seleccionado no coincide con la inscripción"
             )
     
     # Crear la clase (el CRUD valida que enrollment_id sea obligatorio para regular/recovery)
@@ -173,15 +184,26 @@ async def create_recovery_class(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Inscripción {class_data.enrollment_id} no encontrada"
         )
-    
-    if enrollment_obj.teacher_id != current_teacher.id:
+
+    if class_data.teacher_id != enrollment_obj.teacher_id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para crear clases en esta inscripción"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El profesor seleccionado no coincide con la inscripción"
         )
-    
-    # Asignar el teacher_id del profesor logueado
-    class_data.teacher_id = current_teacher.id
+
+    if current_teacher.organization_id:
+        target_teacher = await db.get(Teacher, class_data.teacher_id)
+        if not target_teacher or target_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para asignar esta clase al profesor seleccionado"
+            )
+    else:
+        if class_data.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para crear clases en esta inscripción"
+            )
     
     # Crear la recuperación (el CRUD valida créditos y descuenta automáticamente)
     try:
@@ -225,11 +247,19 @@ async def get_class(
             detail=f"Clase {class_id} no encontrada"
         )
     
-    if class_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para ver esta clase"
-        )
+    if current_teacher.organization_id:
+        class_teacher = await db.get(Teacher, class_obj.teacher_id)
+        if not class_teacher or class_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta clase"
+            )
+    else:
+        if class_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta clase"
+            )
     
     return class_obj
 
@@ -272,11 +302,19 @@ async def update_class(
             detail=f"Clase {class_id} no encontrada"
         )
     
-    if class_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para actualizar esta clase"
-        )
+    if current_teacher.organization_id:
+        class_teacher = await db.get(Teacher, class_obj.teacher_id)
+        if not class_teacher or class_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para actualizar esta clase"
+            )
+    else:
+        if class_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para actualizar esta clase"
+            )
     
     # Actualizar (el CRUD bloquea cambio de 'type')
     try:
@@ -286,7 +324,7 @@ async def update_class(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    await notify_data_change(current_teacher.id, "class", "update", updated_class.id)
+    await notify_data_change(updated_class.teacher_id, "class", "update", updated_class.id)
     
     return updated_class
 
@@ -325,15 +363,23 @@ async def cancel_class(
             detail=f"Clase {class_id} no encontrada"
         )
     
-    if class_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para cancelar esta clase"
-        )
+    if current_teacher.organization_id:
+        class_teacher = await db.get(Teacher, class_obj.teacher_id)
+        if not class_teacher or class_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para cancelar esta clase"
+            )
+    else:
+        if class_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para cancelar esta clase"
+            )
     
     # Cancelar
     cancelled_class = await class_crud.cancel(db, class_id)
-    await notify_data_change(current_teacher.id, "class", "cancel", cancelled_class.id)
+    await notify_data_change(class_obj.teacher_id, "class", "cancel", cancelled_class.id)
     
     return cancelled_class
 
@@ -373,11 +419,19 @@ async def delete_recovery_class(
             detail=f"Clase {class_id} no encontrada"
         )
     
-    if class_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para eliminar esta clase"
-        )
+    if current_teacher.organization_id:
+        class_teacher = await db.get(Teacher, class_obj.teacher_id)
+        if not class_teacher or class_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para eliminar esta clase"
+            )
+    else:
+        if class_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para eliminar esta clase"
+            )
     
     # Eliminar (el CRUD valida que sea recovery y no tenga attendance)
     try:
@@ -387,6 +441,6 @@ async def delete_recovery_class(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    await notify_data_change(current_teacher.id, "class", "delete", class_id)
+    await notify_data_change(class_obj.teacher_id, "class", "delete", class_id)
     
     return None  # 204 No Content

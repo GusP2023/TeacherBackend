@@ -54,11 +54,19 @@ async def get_class_attendance(
             detail=f"Clase {class_id} no encontrada"
         )
     
-    if class_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para ver esta clase"
-        )
+    if current_teacher.organization_id:
+        class_teacher = await db.get(Teacher, class_obj.teacher_id)
+        if not class_teacher or class_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta clase"
+            )
+    else:
+        if class_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta clase"
+            )
     
     # Obtener la asistencia
     attendance_obj = await attendance.get_by_class(db, class_id)
@@ -105,11 +113,19 @@ async def mark_attendance(
             detail=f"Clase {attendance_data.class_id} no encontrada"
         )
     
-    if class_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para marcar asistencia en esta clase"
-        )
+    if current_teacher.organization_id:
+        class_teacher = await db.get(Teacher, class_obj.teacher_id)
+        if not class_teacher or class_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para marcar asistencia en esta clase"
+            )
+    else:
+        if class_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para marcar asistencia en esta clase"
+            )
     
     # Crear la asistencia (el CRUD obtiene enrollment_id de la clase y maneja créditos)
     try:
@@ -119,7 +135,7 @@ async def mark_attendance(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    await notify_data_change(current_teacher.id, "attendance", "create", new_attendance.id)
+    await notify_data_change(class_obj.teacher_id, "attendance", "create", new_attendance.id)
     
     return new_attendance
 
@@ -154,11 +170,25 @@ async def get_attendance(
         )
     
     # Verificar que pertenece al profesor (a través de la clase relacionada)
-    if not getattr(attendance_obj, "class_", None) or attendance_obj.class_.teacher_id != current_teacher.id:
+    if not getattr(attendance_obj, "class_", None):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permiso para ver esta asistencia"
         )
+
+    if current_teacher.organization_id:
+        class_teacher = await db.get(Teacher, attendance_obj.class_.teacher_id)
+        if not class_teacher or class_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta asistencia"
+            )
+    else:
+        if attendance_obj.class_.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta asistencia"
+            )
     
     return attendance_obj
 
@@ -197,11 +227,25 @@ async def delete_attendance(
         )
     
     # Verificar que pertenece al profesor (a través de la clase relacionada)
-    if not getattr(attendance_obj, "class_", None) or attendance_obj.class_.teacher_id != current_teacher.id:
+    if not getattr(attendance_obj, "class_", None):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permiso para eliminar esta asistencia"
         )
+
+    if current_teacher.organization_id:
+        class_teacher = await db.get(Teacher, attendance_obj.class_.teacher_id)
+        if not class_teacher or class_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para eliminar esta asistencia"
+            )
+    else:
+        if attendance_obj.class_.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para eliminar esta asistencia"
+            )
     
     # Eliminar
     try:
@@ -211,7 +255,7 @@ async def delete_attendance(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    await notify_data_change(current_teacher.id, "attendance", "delete", attendance_id)
+    await notify_data_change(attendance_obj.class_.teacher_id, "attendance", "delete", attendance_id)
     
     return None  # 204 No Content
 
@@ -256,11 +300,25 @@ async def update_attendance(
         )
     
     # Verificar que pertenece al profesor (a través de la clase relacionada)
-    if not getattr(attendance_obj, "class_", None) or attendance_obj.class_.teacher_id != current_teacher.id:
+    if not getattr(attendance_obj, "class_", None):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permiso para actualizar esta asistencia"
         )
+
+    if current_teacher.organization_id:
+        class_teacher = await db.get(Teacher, attendance_obj.class_.teacher_id)
+        if not class_teacher or class_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para actualizar esta asistencia"
+            )
+    else:
+        if attendance_obj.class_.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para actualizar esta asistencia"
+            )
     
     # Actualizar (el CRUD maneja lógica de créditos automáticamente)
     try:
@@ -270,6 +328,6 @@ async def update_attendance(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    await notify_data_change(current_teacher.id, "attendance", "update", updated_attendance.id)
+    await notify_data_change(attendance_obj.class_.teacher_id, "attendance", "update", updated_attendance.id)
     
     return updated_attendance
