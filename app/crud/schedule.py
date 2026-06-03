@@ -14,7 +14,7 @@ from app.models.class_model import ClassFormat, Class, ClassType, ClassStatus
 from app.models.student import Student
 from app.schemas.schedule import ScheduleCreate, ScheduleUpdate
 from app.core.config import settings
-from app.jobs.class_generator import generate_classes_for_enrollment, _generate_classes_for_schedule
+from app.jobs.class_generator import generate_classes_for_enrollment
 
 logger = logging.getLogger(__name__)
 
@@ -300,21 +300,20 @@ async def create(db: AsyncSession, schedule_data: ScheduleCreate) -> Schedule:
     # 🔥 GENERAR CLASES AUTOMÁTICAMENTE (mes actual + mes siguiente)
     logger.info(f"Generando clases automáticas para enrollment {schedule_data.enrollment_id}...")
     try:
-        enrollment_obj = await db.get(Enrollment, schedule_data.enrollment_id)
-        if not enrollment_obj:
-            raise ValueError("Enrollment no encontrado al generar clases")
-
-        stats = await _generate_classes_for_schedule(
+        stats = await generate_classes_for_enrollment(
             db,
-            schedule,
-            enrollment_obj,
-            months_ahead=2,  # Generar hasta fin de mes + 2 meses (consistente con reactivaciones)
+            schedule_data.enrollment_id,
+            months_ahead=2,
             from_date=schedule.valid_from
         )
         logger.info(f"Clases generadas: {stats}")
 
+        if stats.get('error'):
+            msg = f"Error al generar clases: {stats['error']}"
+            logger.error(msg)
+            raise ValueError(msg)
         if stats.get('errors'):
-            msg = f"Generación parcial/errores: {stats.get('errors')}"
+            msg = f"Generación parcial/errores: {stats['errors']}"
             logger.error(msg)
             raise ValueError(msg)
 
