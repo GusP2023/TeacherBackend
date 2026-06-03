@@ -3,7 +3,7 @@ CRUD operations for Enrollment model - REACTIVACIÓN CON VALIDACIÓN COMPLETA
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, update, and_, or_, extract
+from sqlalchemy import select, delete, update as sa_update, and_, or_, extract
 from datetime import date, datetime, time as time_type
 from typing import Optional
 
@@ -439,7 +439,7 @@ async def reactivate_enrollment(
 
     # ✅ Desactivar TODOS los schedules antiguos antes de crear nuevos
     await db.execute(
-        update(Schedule)
+        sa_update(Schedule)
         .where(
             and_(
                 Schedule.enrollment_id == enrollment_id,
