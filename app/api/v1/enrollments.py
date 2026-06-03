@@ -698,13 +698,15 @@ async def reactivate_enrollment_put(
         )
 
     # Validar disponibilidad de cada horario
+    # Usar el teacher_id del enrollment, no el del admin que ejecuta la acción
+    target_teacher_id = enrollment_obj.teacher_id
     conflicts_all = []
     for schedule_data in data.schedules:
         conflicts = await check_schedule_availability_dates(
             db=db,
             day=schedule_data.day,
             time_str=schedule_data.time,
-            teacher_id=current_teacher.id,
+            teacher_id=target_teacher_id,
             from_date=data.reactivate_from
         )
 

@@ -128,10 +128,29 @@ async def validate_slot(
             detail="Formato inválido. Debe ser 'individual' o 'group'"
         )
 
-    # Validar disponibilidad
+    # Verificar disponibilidad
+    # Si el admin no pasa teacher_id explícito, usar el del profesor autenticado
+    # El admin DEBE pasar teacher_id para validar el horario del profesor correcto
+    target_teacher_id = teacher_id
+    if target_teacher_id is None:
+        if current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El admin debe especificar teacher_id para validar disponibilidad"
+            )
+        target_teacher_id = current_teacher.id
+    elif current_teacher.organization_id:
+        # Verificar que el teacher_id solicitado pertenece a la misma org
+        target_teacher = await db.get(Teacher, target_teacher_id)
+        if not target_teacher or target_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para validar horarios de este profesor"
+            )
+
     result = await schedule.validate_slot_availability(
         db,
-        teacher_id=teacher_id or current_teacher.id,
+        teacher_id=target_teacher_id,
         day=day,
         time=time,
         format=class_format,
@@ -370,11 +389,19 @@ async def get_schedule(
             detail=f"Horario {schedule_id} no encontrado"
         )
     
-    if schedule_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para ver este horario"
-        )
+    if current_teacher.organization_id:
+        schedule_teacher = await db.get(Teacher, schedule_obj.teacher_id)
+        if not schedule_teacher or schedule_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver este horario"
+            )
+    else:
+        if schedule_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver este horario"
+            )
     
     return schedule_obj
 
@@ -416,11 +443,19 @@ async def update_schedule(
             detail=f"Horario {schedule_id} no encontrado"
         )
     
-    if schedule_obj.teacher_id != current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tienes permiso para actualizar este horario"
-        )
+    if current_teacher.organization_id:
+        schedule_teacher = await db.get(Teacher, schedule_obj.teacher_id)
+        if not schedule_teacher or schedule_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para actualizar este horario"
+            )
+    else:
+        if schedule_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para actualizar este horario"
+            )
     
     # Actualizar (con validación de conflictos si cambia día/hora/duración)
     try:
