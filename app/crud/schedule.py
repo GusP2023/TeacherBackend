@@ -318,6 +318,9 @@ async def create(db: AsyncSession, schedule_data: ScheduleCreate) -> Schedule:
             logger.error(msg)
             raise ValueError(msg)
 
+        # Persistir las clases generadas en la misma transacción.
+        await db.commit()
+
     except Exception as e:
         logger.error(f"Error al generar clases automáticas para schedule {schedule.id}: {e}", exc_info=True)
         raise
