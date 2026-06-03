@@ -20,7 +20,7 @@ from app.core.security import get_current_teacher
 from app.crud import enrollment, student, instrument
 from app.models.teacher import Teacher
 from app.api.v1.websocket import notify_data_change
-from sqlalchemy import select
+from sqlalchemy import select, and_, or_
 from app.schemas.enrollment import (
     EnrollmentCreate,
     EnrollmentUpdate,
@@ -319,10 +319,21 @@ async def update_enrollment(
     if is_reactivating:
         print(f"🔄 [UpdateEnrollment] Reactivación manual detectada para Enrollment {enrollment_id}")
         
-        # 1. Reactivar todos los schedules del enrollment
+        # 1. Reactivar sólo los schedules que estaban vigentes al momento de la suspensión
+        #    Evitar reactivar schedules históricos anteriores que sólo existen para historial.
+        today = date.today()
         await db.execute(
             sa_update(Schedule)
-            .where(Schedule.enrollment_id == enrollment_id)
+            .where(
+                and_(
+                    Schedule.enrollment_id == enrollment_id,
+                    Schedule.valid_from <= today,
+                    or_(
+                        Schedule.valid_until.is_(None),
+                        Schedule.valid_until >= today,
+                    )
+                )
+            )
             .values(active=True)
         )
         await db.flush() # Asegurar que estén activos antes de generar
@@ -332,7 +343,7 @@ async def update_enrollment(
             db, 
             enrollment_id, 
             months_ahead=2,
-            from_date=date.today()
+            from_date=today
         )
         
         if "error" in gen_result:
