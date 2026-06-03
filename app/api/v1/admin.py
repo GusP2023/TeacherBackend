@@ -41,9 +41,13 @@ from app.schemas.student import StudentResponse
 from app.schemas.teacher import TeacherResponse
 from app.schemas.teacher import TeacherUpdate
 from pydantic import BaseModel
+import logging
+
 from app.crud import invitation as invitation_crud
 from app.crud import teacher as teacher_crud
 from app.models.instrument import Instrument
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -288,39 +292,40 @@ async def admin_update_teacher_profile(
     de otro teacher (name, email, phone, birthdate, bio, tarifas, etc.).
     No permite modificar la propia cuenta por este endpoint.
     """
-    if teacher_id == current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No puedes modificar tu propia cuenta desde este endpoint. Usa /teachers/me.",
+    try:
+        result = await db.execute(
+            select(Teacher).where(
+                Teacher.id == teacher_id,
+                Teacher.organization_id == current_teacher.organization_id,
+            )
         )
+        target = result.scalar_one_or_none()
 
-    result = await db.execute(
-        select(Teacher).where(
-            Teacher.id == teacher_id,
-            Teacher.organization_id == current_teacher.organization_id,
+        if not target:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Teacher no encontrado en tu organización.",
+            )
+
+        # Reutilizar CRUD update para aplicar cambios parciales (incluye hashing de password si viene)
+        updated = await teacher_crud.update(db=db, teacher_id=teacher_id, teacher_data=data)
+        if not updated:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al actualizar teacher")
+
+        permissions = resolve_permissions(
+            role=updated.role,
+            organization_id=updated.organization_id,
+            custom_permissions=updated.custom_permissions,
         )
-    )
-    target = result.scalar_one_or_none()
-
-    if not target:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Teacher no encontrado en tu organización.",
-        )
-
-    # Reutilizar CRUD update para aplicar cambios parciales (incluye hashing de password si viene)
-    updated = await teacher_crud.update(db=db, teacher_id=teacher_id, teacher_data=data)
-    if not updated:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error al actualizar teacher")
-
-    permissions = resolve_permissions(
-        role=updated.role,
-        organization_id=updated.organization_id,
-        custom_permissions=updated.custom_permissions,
-    )
-    response = TeacherResponse.model_validate(updated)
-    response.permissions = permissions
-    return response
+        response = TeacherResponse.model_validate(updated)
+        response.permissions = permissions
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.exception("Error updating teacher profile (admin) %s by %s: %s", teacher_id, getattr(current_teacher, 'id', None), e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 class InstrumentsUpdate(BaseModel):
@@ -341,41 +346,42 @@ async def admin_update_teacher_instruments(
     """
     Reemplaza la lista completa de instrumentos asignados a otro teacher.
     """
-    if teacher_id == current_teacher.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No puedes modificar tus propios instrumentos desde este endpoint. Usa /teachers/me/instruments.",
+    try:
+        result = await db.execute(
+            select(Teacher).where(
+                Teacher.id == teacher_id,
+                Teacher.organization_id == current_teacher.organization_id,
+            )
         )
+        target = result.scalar_one_or_none()
+        if not target:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher no encontrado en tu organización.")
 
-    result = await db.execute(
-        select(Teacher).where(
-            Teacher.id == teacher_id,
-            Teacher.organization_id == current_teacher.organization_id,
+        instr_res = await db.execute(select(Instrument).where(Instrument.id.in_(data.instrument_ids)))
+        instruments = instr_res.scalars().all()
+        if len(instruments) != len(data.instrument_ids):
+            found_ids = {i.id for i in instruments}
+            missing = [i for i in data.instrument_ids if i not in found_ids]
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Instrumentos no encontrados: {missing}")
+
+        target.instruments = list(instruments)
+        await db.commit()
+        await db.refresh(target)
+
+        permissions = resolve_permissions(
+            role=target.role,
+            organization_id=target.organization_id,
+            custom_permissions=target.custom_permissions,
         )
-    )
-    target = result.scalar_one_or_none()
-    if not target:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teacher no encontrado en tu organización.")
-
-    instr_res = await db.execute(select(Instrument).where(Instrument.id.in_(data.instrument_ids)))
-    instruments = instr_res.scalars().all()
-    if len(instruments) != len(data.instrument_ids):
-        found_ids = {i.id for i in instruments}
-        missing = [i for i in data.instrument_ids if i not in found_ids]
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Instrumentos no encontrados: {missing}")
-
-    target.instruments = list(instruments)
-    await db.commit()
-    await db.refresh(target)
-
-    permissions = resolve_permissions(
-        role=target.role,
-        organization_id=target.organization_id,
-        custom_permissions=target.custom_permissions,
-    )
-    response = TeacherResponse.model_validate(target)
-    response.permissions = permissions
-    return response
+        response = TeacherResponse.model_validate(target)
+        response.permissions = permissions
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.exception("Error updating teacher instruments (admin) %s by %s: %s", teacher_id, getattr(current_teacher, 'id', None), e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 # ────────────────────────────────────────────────────
