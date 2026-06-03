@@ -788,15 +788,15 @@ async def remove(db: AsyncSession, schedule_id: int) -> bool:
 # PASO 4: VALIDACIÓN DE DISPONIBILIDAD
 # ========================================
 
-# Mapeo de días a números (0=Lunes, 6=Domingo)
+# Mapeo de días a números PostgreSQL (extract('dow'): 0=Domingo, 1=Lunes, ..., 6=Sábado)
 DAY_TO_NUM = {
-    'monday': 0,
-    'tuesday': 1,
-    'wednesday': 2,
-    'thursday': 3,
-    'friday': 4,
-    'saturday': 5,
-    'sunday': 6
+    'sunday': 0,
+    'monday': 1,
+    'tuesday': 2,
+    'wednesday': 3,
+    'thursday': 4,
+    'friday': 5,
+    'saturday': 6,
 }
 
 
