@@ -239,6 +239,7 @@ async def get_student_history(
                     if class_obj.enrollment is not None and class_obj.enrollment.instrument is not None
                     else ""
                 ),
+                duration=class_obj.duration,
                 status=status_value,
                 notes=notes_value,
             )

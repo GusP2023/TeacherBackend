@@ -146,7 +146,7 @@ async def create_class(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    await notify_data_change(current_teacher.id, "class", "create", new_class.id)
+    await notify_data_change(new_class.teacher_id, "class", "create", new_class.id)
     
     return new_class
 
@@ -213,7 +213,7 @@ async def create_recovery_class(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    await notify_data_change(current_teacher.id, "class", "create", new_recovery.id)
+    await notify_data_change(new_recovery.teacher_id, "class", "create", new_recovery.id)
     
     return new_recovery
 

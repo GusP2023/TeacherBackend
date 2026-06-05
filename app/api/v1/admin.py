@@ -27,7 +27,9 @@ from app.core.permissions import (
     PERMISSION_DEFAULTS,
     resolve_permissions,
 )
+from app.models.attendance import Attendance, AttendanceStatus
 from app.models.branch import Branch
+from app.models.class_model import Class, ClassType, ClassStatus
 from app.models.event import Event, EVENT_TYPES
 from app.models.room import Room
 from app.models.room_assignment import RoomAssignment
@@ -1788,3 +1790,224 @@ async def get_event_calendar_emails(
         "emails": unique_emails,
         "total": len(unique_emails),
     }
+
+
+# ────────────────────────────────────────────────────
+# GESTIÓN ADMIN DE CLASES
+# ────────────────────────────────────────────────────
+
+class AdminClassResponse(BaseModel):
+    id: int
+    teacher_id: int
+    enrollment_id: int | None = None
+    schedule_id: int | None = None
+    date: datetime_date
+    time: time_module
+    duration: int
+    status: str
+    type: str
+    format: str
+    notes: str | None = None
+    attendance_status: str | None = None
+    attendance_notes: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminClassUpdate(BaseModel):
+    """
+    Campos editables de una clase desde el panel admin.
+    No permite cambiar el tipo de clase.
+    """
+    date: datetime_date | None = None
+    time: time_module | None = None
+    duration: int | None = Field(None, gt=0, le=240)
+    notes: str | None = None
+    status: ClassStatus | None = None
+
+
+class AdminAttendanceUpdate(BaseModel):
+    """
+    Body para crear o actualizar la asistencia de una clase desde admin.
+    Maneja automáticamente la lógica de créditos por licencia.
+    """
+    status: AttendanceStatus
+    notes: str | None = None
+
+
+def _build_admin_class_response(class_obj: Class) -> dict:
+    return {
+        "id": class_obj.id,
+        "teacher_id": class_obj.teacher_id,
+        "enrollment_id": class_obj.enrollment_id,
+        "schedule_id": class_obj.schedule_id,
+        "date": class_obj.date,
+        "time": class_obj.time,
+        "duration": class_obj.duration,
+        "status": class_obj.status,
+        "type": class_obj.type,
+        "format": class_obj.format,
+        "notes": class_obj.notes,
+        "attendance_status": class_obj.attendance.status if class_obj.attendance else None,
+        "attendance_notes": class_obj.attendance.notes if class_obj.attendance else None,
+    }
+
+
+async def _get_class_for_org(db: AsyncSession, class_id: int, org_id: int) -> Class:
+    """
+    Obtiene una clase verificando que pertenezca a la organización.
+    Lanza 404 si no existe o no corresponde a la org.
+    """
+    result = await db.execute(
+        select(Class).join(Teacher, Teacher.id == Class.teacher_id).where(
+            Class.id == class_id,
+            Teacher.organization_id == org_id,
+        )
+    )
+    class_obj = result.scalar_one_or_none()
+    if not class_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Clase no encontrada en tu organización.",
+        )
+    return class_obj
+
+
+@router.delete(
+    "/classes/{class_id}",
+    summary="Eliminar una clase (admin)",
+)
+async def admin_delete_class(
+    class_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("classes.delete")),
+):
+    """
+    Elimina una clase del calendario.
+
+    Lógica de créditos:
+    - Si la clase es de tipo 'recovery', devuelve +1 crédito al enrollment,
+      independientemente de si tiene asistencia marcada o no.
+    - Si es 'regular' o 'extra', se elimina sin ajuste de créditos.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    class_obj = await _get_class_for_org(db, class_id, current_teacher.organization_id)
+
+    # Devolver crédito si es recuperación
+    if class_obj.type == ClassType.RECOVERY and class_obj.enrollment_id:
+        enrollment_result = await db.execute(
+            select(Enrollment).where(Enrollment.id == class_obj.enrollment_id)
+        )
+        enrollment = enrollment_result.scalar_one_or_none()
+        if enrollment:
+            enrollment.credits += 1
+
+    await db.delete(class_obj)
+    await db.commit()
+    return {"deleted": True, "class_id": class_id}
+
+
+@router.patch(
+    "/classes/{class_id}",
+    response_model=AdminClassResponse,
+    summary="Editar datos de una clase (admin)",
+)
+async def admin_update_class(
+    class_id: int,
+    data: AdminClassUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("students.edit_schedule")),
+):
+    """
+    Edita los datos de una clase existente: fecha, hora, duración, notas y/o estado.
+    No permite cambiar el tipo de clase.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    class_obj = await _get_class_for_org(db, class_id, current_teacher.organization_id)
+
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(class_obj, field, value)
+
+    await db.commit()
+    await db.refresh(class_obj)
+    return _build_admin_class_response(class_obj)
+
+
+@router.patch(
+    "/classes/{class_id}/attendance",
+    response_model=AdminClassResponse,
+    summary="Crear o actualizar asistencia de una clase (admin)",
+)
+async def admin_update_class_attendance(
+    class_id: int,
+    data: AdminAttendanceUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("classes.mark_attendance")),
+):
+    """
+    Crea o actualiza el registro de asistencia de una clase desde el panel admin.
+
+    Lógica de créditos:
+    - Marcar como 'license' o 'excused' → +1 crédito al enrollment.
+    - Cambiar de 'license'/'excused' a 'present'/'absent' → -1 crédito (se revoca).
+    - Siempre marca la clase como 'completed' al registrar asistencia.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    class_obj = await _get_class_for_org(db, class_id, current_teacher.organization_id)
+
+    _LICENSE = {AttendanceStatus.LICENSE, AttendanceStatus.EXCUSED}
+
+    # Obtener enrollment para ajuste de créditos
+    enrollment = None
+    if class_obj.enrollment_id:
+        enr_result = await db.execute(
+            select(Enrollment).where(Enrollment.id == class_obj.enrollment_id)
+        )
+        enrollment = enr_result.scalar_one_or_none()
+
+    if class_obj.attendance:
+        # Actualizar asistencia existente con ajuste de crédito delta
+        prev_is_license = class_obj.attendance.status in _LICENSE
+        new_is_license = data.status in _LICENSE
+
+        if enrollment:
+            if prev_is_license and not new_is_license:
+                # Revocar licencia → quitar crédito
+                enrollment.credits = max(0, enrollment.credits - 1)
+            elif not prev_is_license and new_is_license:
+                # Nueva licencia → dar crédito
+                enrollment.credits += 1
+
+        class_obj.attendance.status = data.status
+        class_obj.attendance.notes = data.notes
+    else:
+        # Crear registro de asistencia nuevo
+        if enrollment and data.status in _LICENSE:
+            enrollment.credits += 1
+
+        db.add(Attendance(
+            class_id=class_obj.id,
+            status=data.status,
+            notes=data.notes,
+        ))
+
+    class_obj.status = ClassStatus.COMPLETED
+
+    await db.commit()
+    await db.refresh(class_obj)
+    return _build_admin_class_response(class_obj)

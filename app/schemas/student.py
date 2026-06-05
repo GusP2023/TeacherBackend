@@ -99,6 +99,7 @@ class StudentHistoryItem(BaseModel):
     class_type: str
     enrollment_id: int
     instrument: str
+    duration: int | None = None
     status: str | None = None
     notes: str | None = None
 
