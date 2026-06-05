@@ -42,6 +42,7 @@ from app.schemas.invitation import InvitationCreate, InvitationResponse
 from app.schemas.student import StudentResponse
 from app.schemas.teacher import TeacherResponse
 from app.schemas.teacher import TeacherUpdate
+from app.api.v1.websocket import notify_data_change
 from pydantic import BaseModel
 import logging
 
@@ -2010,4 +2011,8 @@ async def admin_update_class_attendance(
 
     await db.commit()
     await db.refresh(class_obj)
+
+    if class_obj.attendance:
+        await notify_data_change(class_obj.teacher_id, "attendance", "update", class_obj.attendance.id)
+
     return _build_admin_class_response(class_obj)
