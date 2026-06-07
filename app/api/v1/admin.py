@@ -1908,8 +1908,10 @@ async def admin_delete_class(
         if enrollment:
             enrollment.credits += 1
 
+    teacher_id = class_obj.teacher_id
     await db.delete(class_obj)
     await db.commit()
+    await notify_data_change(teacher_id, "class", "delete", class_id)
     return {"deleted": True, "class_id": class_id}
 
 
@@ -1941,6 +1943,7 @@ async def admin_update_class(
 
     await db.commit()
     await db.refresh(class_obj)
+    await notify_data_change(class_obj.teacher_id, "class", "update", class_obj.id)
     return _build_admin_class_response(class_obj)
 
 

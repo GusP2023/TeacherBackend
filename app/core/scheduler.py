@@ -15,6 +15,7 @@ IMPORTANTE:
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 from datetime import date, datetime, timezone
 
 from app.core.database import get_db, async_session_maker
@@ -51,6 +52,15 @@ async def monthly_class_generation_job():
     # Obtener sesión de base de datos
     async for db in get_db():
         try:
+            # Intentar adquirir lock exclusivo. Si otro worker ya lo tiene, salir.
+            lock_result = await db.execute(
+                text("SELECT pg_try_advisory_lock(12345678)")
+            )
+            lock_acquired = lock_result.scalar()
+            if not lock_acquired:
+                print("[JOB] Otro worker ya está ejecutando el job, omitiendo.")
+                break
+
             from_date = date.today().replace(day=1)  # Generar clases a partir del primer día del mes actual
             result = await generate_monthly_classes(db, from_date=from_date)
 
@@ -111,6 +121,15 @@ async def check_and_run_missed_job():
 
     try:
         async with async_session_maker() as db:
+            # Intentar adquirir lock exclusivo. Si otro worker ya lo tiene, salir.
+            lock_result = await db.execute(
+                text("SELECT pg_try_advisory_lock(12345678)")
+            )
+            lock_acquired = lock_result.scalar()
+            if not lock_acquired:
+                print("[SCHEDULER] Otro worker ya está ejecutando check_and_run_missed_job, omitiendo.")
+                return
+
             # Buscar el marcador para "monthly_class_generation"
             log_entry = await db.get(JobRunLog, "monthly_class_generation")
 

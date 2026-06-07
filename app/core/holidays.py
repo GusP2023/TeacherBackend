@@ -80,6 +80,7 @@ HOLIDAYS_2026 = [
     date(2026, 6, 4),
     date(2026, 6, 5),   # Corpus Christi (ampliado 2 dias)
     date(2026, 6, 21),  # Año Nuevo Aymara
+    date(2026, 6, 22),  # Año Nuevo Aymara (asueto extendido)
 
     # Agosto
     date(2026, 8, 6),   # Día de la Independencia de Bolivia
