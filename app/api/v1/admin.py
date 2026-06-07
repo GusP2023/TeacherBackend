@@ -19,6 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func
+from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field, ConfigDict
 
 from app.core.database import get_db
@@ -32,9 +33,7 @@ from app.models.branch import Branch
 from app.models.class_model import Class, ClassType, ClassStatus
 from app.models.event import Event, EVENT_TYPES
 from app.models.room import Room
-from app.models.room_assignment import RoomAssignment
-from app.models.room_override import RoomOverride
-from app.models.schedule import DayOfWeek
+from app.models.schedule import DayOfWeek, Schedule
 from app.models.student import Student
 from app.models.teacher import Teacher, VALID_ROLES
 from app.models.enrollment import Enrollment, EnrollmentStatus
@@ -43,7 +42,6 @@ from app.schemas.student import StudentResponse
 from app.schemas.teacher import TeacherResponse
 from app.schemas.teacher import TeacherUpdate
 from app.api.v1.websocket import notify_data_change
-from pydantic import BaseModel
 import logging
 
 from app.crud import invitation as invitation_crud
@@ -774,142 +772,75 @@ async def update_room(
     return room
 
 
-class RoomAssignmentCreate(BaseModel):
-    teacher_id: int
-    room_id: int
-    day: DayOfWeek
-    time: time_module
-    duration: int = Field(..., gt=0)
-    valid_from: datetime_date
-    valid_until: datetime_date | None = None
-
-
-class RoomAssignmentResponse(BaseModel):
+class AdminScheduleRoomItem(BaseModel):
     id: int
     teacher_id: int
-    room_id: int
-    day: DayOfWeek
+    teacher_name: str
+    day: str
     time: time_module
     duration: int
-    valid_from: datetime_date
-    valid_until: datetime_date | None = None
-    created_at: datetime_type
-    updated_at: datetime_type
+    room_id: int | None = None
+    room_name: str | None = None
+    student_name: str | None = None
+    instrument_name: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
-@router.post(
-    "/room-assignments",
-    response_model=RoomAssignmentResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Asignar sala recurrente a un profesor",
-)
-async def create_room_assignment(
-    data: RoomAssignmentCreate,
-    db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
-):
-    if not current_teacher.organization_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Tu cuenta no está asociada a ninguna organización.",
-        )
-
-    teacher_result = await db.execute(
-        select(Teacher).where(
-            Teacher.id == data.teacher_id,
-            Teacher.organization_id == current_teacher.organization_id,
-        )
-    )
-    teacher = teacher_result.scalar_one_or_none()
-    if not teacher:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Teacher no encontrado en tu organización.",
-        )
-
-    room_result = await db.execute(
-        select(Room).where(
-            Room.id == data.room_id,
-            Room.organization_id == current_teacher.organization_id,
-        )
-    )
-    room = room_result.scalar_one_or_none()
-    if not room:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Sala no encontrada en tu organización.",
-        )
-
-    active_assignments = await db.execute(
-        select(RoomAssignment).where(
-            RoomAssignment.teacher_id == data.teacher_id,
-            RoomAssignment.day == data.day,
-            or_(
-                RoomAssignment.valid_until.is_(None),
-                RoomAssignment.valid_until > data.valid_from,
-            ),
-        )
-    )
-    for existing in active_assignments.scalars().all():
-        existing.valid_until = data.valid_from
-
-    assignment = RoomAssignment(
-        teacher_id=data.teacher_id,
-        room_id=data.room_id,
-        day=data.day,
-        time=data.time,
-        duration=data.duration,
-        valid_from=data.valid_from,
-        valid_until=None,
-    )
-    db.add(assignment)
-    await db.commit()
-    await db.refresh(assignment)
-    return assignment
+class ScheduleRoomAssign(BaseModel):
+    room_id: int | None
 
 
 @router.get(
-    "/room-assignments",
-    response_model=list[RoomAssignmentResponse],
-    summary="Listar asignaciones de sala activas",
+    "/schedules",
+    response_model=list[AdminScheduleRoomItem],
+    summary="Listar horarios activos de la organización",
 )
-async def list_room_assignments(
-    teacher_id: int | None = None,
-    room_id: int | None = None,
+async def list_org_schedules(
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     if not current_teacher.organization_id:
         return []
 
-    today = datetime_date.today()
-    query = select(RoomAssignment).join(Room).where(
-        Room.organization_id == current_teacher.organization_id,
-        or_(
-            RoomAssignment.valid_until.is_(None),
-            RoomAssignment.valid_until > today,
-        ),
-    )
+    query = select(Schedule).options(
+        selectinload(Schedule.teacher),
+        selectinload(Schedule.enrollment).selectinload(Enrollment.student),
+        selectinload(Schedule.enrollment).selectinload(Enrollment.instrument),
+        selectinload(Schedule.room),
+    ).join(Teacher).where(
+        Teacher.organization_id == current_teacher.organization_id,
+        Schedule.active.is_(True),
+    ).order_by(Teacher.name, Schedule.day, Schedule.time)
 
-    if teacher_id is not None:
-        query = query.where(RoomAssignment.teacher_id == teacher_id)
-    if room_id is not None:
-        query = query.where(RoomAssignment.room_id == room_id)
-
-    query = query.order_by(RoomAssignment.teacher_id, RoomAssignment.day, RoomAssignment.time)
     result = await db.execute(query)
-    return result.scalars().all()
+    schedules = result.scalars().all()
+
+    return [
+        AdminScheduleRoomItem(
+            id=schedule.id,
+            teacher_id=schedule.teacher_id,
+            teacher_name=schedule.teacher.name if schedule.teacher else "",
+            day=schedule.day.value if schedule.day else "",
+            time=schedule.time,
+            duration=schedule.duration,
+            room_id=schedule.room_id,
+            room_name=schedule.room.name if schedule.room else None,
+            student_name=(schedule.enrollment.student.name if schedule.enrollment and schedule.enrollment.student else None),
+            instrument_name=(schedule.enrollment.instrument.name if schedule.enrollment and schedule.enrollment.instrument else None),
+        )
+        for schedule in schedules
+    ]
 
 
-@router.delete(
-    "/room-assignments/{assignment_id}",
-    response_model=RoomAssignmentResponse,
-    summary="Cerrar una asignación recurrente de sala",
+@router.patch(
+    "/schedules/{schedule_id}/room",
+    response_model=AdminScheduleRoomItem,
+    summary="Asignar o desasignar una sala a un horario recurrente",
 )
-async def close_room_assignment(
-    assignment_id: int,
+async def update_schedule_room(
+    schedule_id: int,
+    data: ScheduleRoomAssign,
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
@@ -919,76 +850,23 @@ async def close_room_assignment(
             detail="Tu cuenta no está asociada a ninguna organización.",
         )
 
-    result = await db.execute(
-        select(RoomAssignment).join(Room).where(
-            RoomAssignment.id == assignment_id,
-            Room.organization_id == current_teacher.organization_id,
-        )
+    query = select(Schedule).options(
+        selectinload(Schedule.teacher),
+        selectinload(Schedule.enrollment).selectinload(Enrollment.student),
+        selectinload(Schedule.enrollment).selectinload(Enrollment.instrument),
+        selectinload(Schedule.room),
+    ).join(Teacher).where(
+        Schedule.id == schedule_id,
+        Teacher.organization_id == current_teacher.organization_id,
     )
-    assignment = result.scalar_one_or_none()
-    if not assignment:
+
+    result = await db.execute(query)
+    schedule = result.scalar_one_or_none()
+
+    if not schedule:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Asignación de sala no encontrada en tu organización.",
-        )
-
-    assignment.valid_until = datetime_date.today()
-    await db.commit()
-    await db.refresh(assignment)
-    return assignment
-
-
-class RoomOverrideCreate(BaseModel):
-    teacher_id: int
-    room_id: int | None = None
-    date: datetime_date
-    time: time_module
-    duration: int = Field(..., gt=0)
-    reason: str | None = Field(None, max_length=255)
-
-
-class RoomOverrideResponse(BaseModel):
-    id: int
-    teacher_id: int
-    room_id: int | None = None
-    date: datetime_date
-    time: time_module
-    duration: int
-    reason: str | None = None
-    created_at: datetime_type
-    updated_at: datetime_type
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-@router.post(
-    "/room-overrides",
-    response_model=RoomOverrideResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Crear override puntual de sala",
-)
-async def create_room_override(
-    data: RoomOverrideCreate,
-    db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
-):
-    if not current_teacher.organization_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Tu cuenta no está asociada a ninguna organización.",
-        )
-
-    teacher_result = await db.execute(
-        select(Teacher).where(
-            Teacher.id == data.teacher_id,
-            Teacher.organization_id == current_teacher.organization_id,
-        )
-    )
-    teacher = teacher_result.scalar_one_or_none()
-    if not teacher:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Teacher no encontrado en tu organización.",
+            detail="Horario no encontrado en tu organización.",
         )
 
     if data.room_id is not None:
@@ -998,199 +876,28 @@ async def create_room_override(
                 Room.organization_id == current_teacher.organization_id,
             )
         )
-        room = room_result.scalar_one_or_none()
-        if not room:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Sala no encontrada en tu organización.",
-            )
-
-    existing_result = await db.execute(
-        select(RoomOverride).where(
-            RoomOverride.teacher_id == data.teacher_id,
-            RoomOverride.date == data.date,
-        )
-    )
-    if existing_result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Ya existe un override para ese teacher y esa fecha.",
-        )
-
-    override = RoomOverride(
-        teacher_id=data.teacher_id,
-        room_id=data.room_id,
-        date=data.date,
-        time=data.time,
-        duration=data.duration,
-        reason=data.reason,
-    )
-    db.add(override)
-    await db.commit()
-    await db.refresh(override)
-    return override
-
-
-@router.get(
-    "/room-overrides",
-    response_model=list[RoomOverrideResponse],
-    summary="Listar overrides puntuales futuros",
-)
-async def list_room_overrides(
-    teacher_id: int | None = None,
-    room_id: int | None = None,
-    db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
-):
-    if not current_teacher.organization_id:
-        return []
-
-    if room_id is not None:
-        room_result = await db.execute(
-            select(Room).where(
-                Room.id == room_id,
-                Room.organization_id == current_teacher.organization_id,
-            )
-        )
         if not room_result.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Sala no encontrada en tu organización.",
             )
 
-    today = datetime_date.today()
-    query = select(RoomOverride).join(Teacher).where(
-        Teacher.organization_id == current_teacher.organization_id,
-        RoomOverride.date >= today,
-    )
-    if teacher_id is not None:
-        query = query.where(RoomOverride.teacher_id == teacher_id)
-    if room_id is not None:
-        query = query.where(RoomOverride.room_id == room_id)
-
-    result = await db.execute(query.order_by(RoomOverride.date, RoomOverride.time))
-    return result.scalars().all()
-
-
-@router.delete(
-    "/room-overrides/{override_id}",
-    summary="Eliminar override puntual de sala",
-)
-async def delete_room_override(
-    override_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
-):
-    if not current_teacher.organization_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Tu cuenta no está asociada a ninguna organización.",
-        )
-
-    result = await db.execute(
-        select(RoomOverride).join(Teacher).where(
-            RoomOverride.id == override_id,
-            Teacher.organization_id == current_teacher.organization_id,
-        )
-    )
-    override = result.scalar_one_or_none()
-    if not override:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Override no encontrado en tu organización.",
-        )
-
-    await db.delete(override)
+    schedule.room_id = data.room_id
     await db.commit()
-    return {"deleted": True}
+    await db.refresh(schedule)
 
-
-class OccupiedBy(BaseModel):
-    teacher_id: int
-    teacher_name: str
-
-
-class RoomAvailabilityResponse(BaseModel):
-    id: int
-    branch_id: int
-    name: str
-    active: bool
-    available: bool
-    occupied_by: OccupiedBy | None = None
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-@router.get(
-    "/rooms/availability",
-    response_model=list[RoomAvailabilityResponse],
-    summary="Ver disponibilidad de salas para un slot",
-)
-async def get_room_availability(
-    day: DayOfWeek,
-    time: str,
-    duration: int = Query(..., gt=0),
-    db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
-):
-    if not current_teacher.organization_id:
-        return []
-
-    try:
-        requested_time = time_module.fromisoformat(time)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Formato de hora inválido. Use HH:MM o HH:MM:SS.",
-        )
-
-    end_minutes = (requested_time.hour * 60 + requested_time.minute) + duration
-
-    rooms_result = await db.execute(
-        select(Room).where(
-            Room.organization_id == current_teacher.organization_id,
-            Room.active.is_(True),
-        ).order_by(Room.name)
+    return AdminScheduleRoomItem(
+        id=schedule.id,
+        teacher_id=schedule.teacher_id,
+        teacher_name=schedule.teacher.name if schedule.teacher else "",
+        day=schedule.day.value if schedule.day else "",
+        time=schedule.time,
+        duration=schedule.duration,
+        room_id=schedule.room_id,
+        room_name=schedule.room.name if schedule.room else None,
+        student_name=(schedule.enrollment.student.name if schedule.enrollment and schedule.enrollment.student else None),
+        instrument_name=(schedule.enrollment.instrument.name if schedule.enrollment and schedule.enrollment.instrument else None),
     )
-    rooms = rooms_result.scalars().all()
-
-    assignment_result = await db.execute(
-        select(RoomAssignment, Teacher).join(Teacher, Teacher.id == RoomAssignment.teacher_id).join(Room, Room.id == RoomAssignment.room_id).where(
-            Room.organization_id == current_teacher.organization_id,
-            RoomAssignment.day == day,
-            or_(
-                RoomAssignment.valid_until.is_(None),
-                RoomAssignment.valid_until > datetime_date.today(),
-            ),
-        )
-    )
-
-    occupied_by_room: dict[int, OccupiedBy] = {}
-    for assignment, teacher in assignment_result.all():
-        start_minutes = assignment.time.hour * 60 + assignment.time.minute
-        assignment_end = start_minutes + assignment.duration
-        if start_minutes < end_minutes and assignment_end > (requested_time.hour * 60 + requested_time.minute):
-            if assignment.room_id not in occupied_by_room:
-                occupied_by_room[assignment.room_id] = OccupiedBy(
-                    teacher_id=teacher.id,
-                    teacher_name=teacher.name,
-                )
-
-    availability = []
-    for room in rooms:
-        occupied = occupied_by_room.get(room.id)
-        availability.append(
-            RoomAvailabilityResponse(
-                id=room.id,
-                branch_id=room.branch_id,
-                name=room.name,
-                active=room.active,
-                available=occupied is None,
-                occupied_by=occupied,
-            )
-        )
-
-    return availability
 
 
 class TeacherPermissionsUpdate(BaseModel):
@@ -1800,6 +1507,7 @@ async def get_event_calendar_emails(
 class AdminClassResponse(BaseModel):
     id: int
     teacher_id: int
+    room_id: int | None = None
     enrollment_id: int | None = None
     schedule_id: int | None = None
     date: datetime_date
@@ -1825,6 +1533,7 @@ class AdminClassUpdate(BaseModel):
     duration: int | None = Field(None, gt=0, le=240)
     notes: str | None = None
     status: ClassStatus | None = None
+    room_id: int | None = None
 
 
 class AdminAttendanceUpdate(BaseModel):
@@ -1840,6 +1549,7 @@ def _build_admin_class_response(class_obj: Class) -> dict:
     return {
         "id": class_obj.id,
         "teacher_id": class_obj.teacher_id,
+        "room_id": class_obj.room_id,
         "enrollment_id": class_obj.enrollment_id,
         "schedule_id": class_obj.schedule_id,
         "date": class_obj.date,

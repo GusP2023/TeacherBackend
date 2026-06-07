@@ -38,7 +38,7 @@ Formatos:
 from datetime import date, time
 from sqlalchemy import Integer, Date, Time, ForeignKey, Enum as SQLEnum, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from typing import TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 import enum
 
 from .base import Base, TimestampMixin
@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from .enrollment import Enrollment
     from .teacher import Teacher
     from .attendance import Attendance
+    from .room import Room
 
 
 class ClassStatus(str, enum.Enum):
@@ -189,6 +190,15 @@ class Class(Base, TimestampMixin):
         index=True,
         comment="ID del profesor (redundante pero rápido para queries)"
     )
+
+    room_id: Mapped[int | None] = mapped_column(
+        ForeignKey("rooms.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+        comment="Sala asignada a la clase concreta"
+    )
+
+    room: Mapped[Optional["Room"]] = relationship("Room", lazy="selectin")
     
     # ========================================
     # FECHA Y HORA ESPECÍFICA

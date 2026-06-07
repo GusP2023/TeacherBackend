@@ -32,7 +32,7 @@ Cambio de horario:
 from datetime import date, time
 from sqlalchemy import Integer, Date, Time, Boolean, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from typing import List, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 import enum
 
 from .base import Base, TimestampMixin
@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from .enrollment import Enrollment
     from .teacher import Teacher
     from .class_model import Class
+    from .room import Room
 
 
 class DayOfWeek(str, enum.Enum):
@@ -142,6 +143,15 @@ class Schedule(Base, TimestampMixin):
         index=True,
         comment="ID del profesor (redundante pero útil para queries)"
     )
+
+    room_id: Mapped[int | None] = mapped_column(
+        ForeignKey("rooms.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+        comment="Sala asignada al horario recurrente"
+    )
+
+    room: Mapped[Optional["Room"]] = relationship("Room", lazy="selectin")
     
     # ========================================
     # DEFINICIÓN DEL HORARIO

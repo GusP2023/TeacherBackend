@@ -63,6 +63,7 @@ class ScheduleCreate(ScheduleBase):
     """
     teacher_id: int = Field(..., gt=0)
     active: bool = True
+    room_id: int | None = None
 
 
 class ScheduleUpdate(BaseModel):
@@ -84,6 +85,7 @@ class ScheduleUpdate(BaseModel):
     valid_from: date | None = None
     valid_until: date | None = None
     active: bool | None = None
+    room_id: int | None = None
 
 
 # Schema anidado para Enrollment (solo campos necesarios)
@@ -113,6 +115,7 @@ class ScheduleResponse(ScheduleBase):
     sync_id: str | None = None
     created_at: datetime
     updated_at: datetime
+    room_id: int | None = None
 
     # Relación anidada
     enrollment: EnrollmentNested | None = None

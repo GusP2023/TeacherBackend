@@ -106,7 +106,8 @@ class ClassCreate(ClassBase):
         "duration": 45,
         "status": "scheduled",
         "type": "regular",
-        "format": "individual"
+        "format": "individual",
+        "room_id": 2
     }
     
     Ejemplo clase de recuperación manual:
@@ -118,11 +119,13 @@ class ClassCreate(ClassBase):
         "time": "18:00:00",
         "duration": 45,
         "type": "recovery",
-        "format": "individual"
+        "format": "individual",
+        "room_id": null
     }
     """
     teacher_id: int = Field(..., gt=0)
     schedule_id: int | None = Field(None, gt=0)
+    room_id: int | None = None
 
 
 class ClassUpdate(BaseModel):
@@ -145,6 +148,7 @@ class ClassUpdate(BaseModel):
     status: ClassStatus | None = None
     type: ClassType | None = None
     format: ClassFormat | None = None
+    room_id: int | None = None
 
 
 class ClassResponse(ClassBase):
@@ -163,6 +167,7 @@ class ClassResponse(ClassBase):
     id: int
     teacher_id: int
     schedule_id: int | None = None
+    room_id: int | None = None
     sync_id: str | None = None
     created_at: datetime
     updated_at: datetime
