@@ -1899,6 +1899,13 @@ async def admin_delete_class(
 
     class_obj = await _get_class_for_org(db, class_id, current_teacher.organization_id)
 
+    # Bloquear eliminación si la clase tiene asistencia registrada
+    if class_obj.attendance:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Esta clase tiene asistencia registrada. Eliminá primero la asistencia antes de borrar la clase.",
+        )
+
     # Devolver crédito si es recuperación
     if class_obj.type == ClassType.RECOVERY and class_obj.enrollment_id:
         enrollment_result = await db.execute(
@@ -2019,3 +2026,54 @@ async def admin_update_class_attendance(
         await notify_data_change(class_obj.teacher_id, "attendance", "update", class_obj.attendance.id)
 
     return _build_admin_class_response(class_obj)
+
+
+@router.delete(
+    "/classes/{class_id}/attendance",
+    summary="Eliminar asistencia de una clase (admin)",
+)
+async def admin_delete_class_attendance(
+    class_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("classes.mark_attendance")),
+):
+    """
+    Elimina el registro de asistencia de una clase y la regresa a estado 'scheduled'.
+
+    Lógica de créditos:
+    - Si la asistencia eliminada era 'license' o 'excused', se revoca el crédito
+      otorgado originalmente (-1 al enrollment).
+    - Para cualquier otro status no se ajustan créditos.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    class_obj = await _get_class_for_org(db, class_id, current_teacher.organization_id)
+
+    if not class_obj.attendance:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Esta clase no tiene asistencia registrada.",
+        )
+
+    _LICENSE = {AttendanceStatus.LICENSE, AttendanceStatus.EXCUSED}
+
+    # Revertir crédito si corresponde
+    if class_obj.attendance.status in _LICENSE and class_obj.enrollment_id:
+        enr_result = await db.execute(
+            select(Enrollment).where(Enrollment.id == class_obj.enrollment_id)
+        )
+        enrollment = enr_result.scalar_one_or_none()
+        if enrollment:
+            enrollment.credits = max(0, enrollment.credits - 1)
+
+    # Eliminar asistencia y regresar clase a scheduled
+    await db.delete(class_obj.attendance)
+    class_obj.status = ClassStatus.SCHEDULED
+
+    await db.commit()
+    await notify_data_change(class_obj.teacher_id, "attendance", "delete", class_id)
+    return {"deleted": True, "class_id": class_id}
