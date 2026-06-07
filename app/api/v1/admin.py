@@ -13,7 +13,7 @@ Endpoints:
     GET   /admin/permissions/schema              → Ver qué permisos son configurables (con labels)
 """
 
-from datetime import date as datetime_date, time as time_module
+from datetime import date as datetime_date, time as time_module, datetime as datetime_type
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -509,8 +509,8 @@ class BranchResponse(BaseModel):
     name: str
     address: str | None = None
     active: bool
-    created_at: str
-    updated_at: str
+    created_at: datetime_type
+    updated_at: datetime_type
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -629,8 +629,8 @@ class RoomResponse(BaseModel):
     description: str | None = None
     capacity: int
     active: bool
-    created_at: str
-    updated_at: str
+    created_at: datetime_type
+    updated_at: datetime_type
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -793,8 +793,8 @@ class RoomAssignmentResponse(BaseModel):
     duration: int
     valid_from: datetime_date
     valid_until: datetime_date | None = None
-    created_at: str
-    updated_at: str
+    created_at: datetime_type
+    updated_at: datetime_type
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -955,8 +955,8 @@ class RoomOverrideResponse(BaseModel):
     time: time_module
     duration: int
     reason: str | None = None
-    created_at: str
-    updated_at: str
+    created_at: datetime_type
+    updated_at: datetime_type
 
     model_config = ConfigDict(from_attributes=True)
 
