@@ -1107,8 +1107,9 @@ async def update_schedule_room(
                 return f"{value.hour:02d}:{value.minute:02d}"
 
             conflict_start = fmt_time(conflicting_schedule.time)
-            conflict_end_hour = (conflicting_schedule.time.hour * 60 + conflicting_schedule.duration) // 60
-            conflict_end_minute = (conflicting_schedule.time.hour * 60 + conflicting_schedule.duration) % 60
+            conflict_end_total = conflicting_schedule.time.hour * 60 + conflicting_schedule.time.minute + conflicting_schedule.duration
+            conflict_end_hour = conflict_end_total // 60
+            conflict_end_minute = conflict_end_total % 60
             conflict_end = f"{conflict_end_hour:02d}:{conflict_end_minute:02d}"
             student_name = (
                 conflicting_schedule.enrollment.student.name
@@ -1117,7 +1118,7 @@ async def update_schedule_room(
             )
             teacher_name = conflicting_schedule.teacher.name if conflicting_schedule.teacher else None
             detail = (
-                f"La {room.name} ya está ocupada el {schedule.day} de {conflict_start} a {conflict_end}"
+                f"La {room.name} ya está ocupada el {schedule.day.value} de {conflict_start} a {conflict_end}"
             )
             if student_name and teacher_name:
                 detail += f" ({student_name} con {teacher_name})."
