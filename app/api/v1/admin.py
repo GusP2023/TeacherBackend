@@ -1070,11 +1070,60 @@ async def update_schedule_room(
                 Room.organization_id == current_teacher.organization_id,
             )
         )
-        if not room_result.scalar_one_or_none():
+        room = room_result.scalar_one_or_none()
+        if not room:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Sala no encontrada en tu organización.",
             )
+
+        existing_start = func.extract("hour", Schedule.time) * 60 + func.extract("minute", Schedule.time)
+        existing_end = existing_start + Schedule.duration
+        new_start = schedule.time.hour * 60 + schedule.time.minute
+        new_end = new_start + schedule.duration
+
+        conflict_query = (
+            select(Schedule)
+            .options(
+                selectinload(Schedule.teacher),
+                selectinload(Schedule.enrollment).selectinload(Enrollment.student),
+            )
+            .join(Teacher)
+            .where(
+                Schedule.id != schedule_id,
+                Schedule.active.is_(True),
+                Schedule.room_id == data.room_id,
+                Schedule.day == schedule.day,
+                Teacher.organization_id == current_teacher.organization_id,
+                existing_start < new_end,
+                existing_end > new_start,
+            )
+        )
+        conflict_result = await db.execute(conflict_query)
+        conflicting_schedule = conflict_result.scalar_one_or_none()
+
+        if conflicting_schedule:
+            def fmt_time(value: time_module) -> str:
+                return f"{value.hour:02d}:{value.minute:02d}"
+
+            conflict_start = fmt_time(conflicting_schedule.time)
+            conflict_end_hour = (conflicting_schedule.time.hour * 60 + conflicting_schedule.duration) // 60
+            conflict_end_minute = (conflicting_schedule.time.hour * 60 + conflicting_schedule.duration) % 60
+            conflict_end = f"{conflict_end_hour:02d}:{conflict_end_minute:02d}"
+            student_name = (
+                conflicting_schedule.enrollment.student.name
+                if conflicting_schedule.enrollment and conflicting_schedule.enrollment.student
+                else None
+            )
+            teacher_name = conflicting_schedule.teacher.name if conflicting_schedule.teacher else None
+            detail = (
+                f"La {room.name} ya está ocupada el {schedule.day} de {conflict_start} a {conflict_end}"
+            )
+            if student_name and teacher_name:
+                detail += f" ({student_name} con {teacher_name})."
+            else:
+                detail += "."
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
     schedule.room_id = data.room_id
     await db.commit()
