@@ -2,11 +2,19 @@
 Modelo Room - Sala física dentro de una sucursal.
 """
 
-from sqlalchemy import String, Boolean, Integer, ForeignKey
+from sqlalchemy import String, Boolean, Integer, ForeignKey, Table, Column
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import TYPE_CHECKING, List
 
 from .base import Base, TimestampMixin
+from .instrument import Instrument
+
+room_instruments = Table(
+    "room_instruments",
+    Base.metadata,
+    Column("room_id", Integer, ForeignKey("rooms.id", ondelete="CASCADE"), primary_key=True),
+    Column("instrument_id", Integer, ForeignKey("instruments.id", ondelete="CASCADE"), primary_key=True),
+)
 
 if TYPE_CHECKING:
     from .branch import Branch
@@ -89,6 +97,12 @@ class Room(Base, TimestampMixin):
     events: Mapped[List["Event"]] = relationship(
         back_populates="room",
         lazy="noload"
+    )
+
+    instruments: Mapped[list["Instrument"]] = relationship(
+        "Instrument",
+        secondary=room_instruments,
+        lazy="selectin",
     )
 
     def __repr__(self) -> str:

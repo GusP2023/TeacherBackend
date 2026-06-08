@@ -18,7 +18,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, update
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -617,6 +617,7 @@ class RoomCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     description: str | None = Field(None, max_length=255)
     capacity: int = Field(default=1, ge=1)
+    instrument_ids: list[int] = Field(default_factory=list)
 
 
 class RoomResponse(BaseModel):
@@ -627,6 +628,7 @@ class RoomResponse(BaseModel):
     description: str | None = None
     capacity: int
     active: bool
+    instrument_ids: list[int] = Field(default_factory=list)
     created_at: datetime_type
     updated_at: datetime_type
 
@@ -638,6 +640,7 @@ class RoomUpdate(BaseModel):
     description: str | None = Field(None, max_length=255)
     capacity: int | None = Field(None, ge=1)
     active: bool | None = None
+    instrument_ids: list[int] | None = None
 
 
 @router.post(
@@ -679,9 +682,47 @@ async def create_room(
         capacity=data.capacity,
     )
     db.add(room)
+    if data.instrument_ids:
+        unique_instrument_ids = list(dict.fromkeys(data.instrument_ids))
+        instr_res = await db.execute(select(Instrument).where(Instrument.id.in_(unique_instrument_ids)))
+        instruments = instr_res.scalars().all()
+        if len(instruments) != len(unique_instrument_ids):
+            found_ids = {i.id for i in instruments}
+            missing = [i for i in unique_instrument_ids if i not in found_ids]
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Instrumentos no encontrados: {missing}")
+        room.instruments = instruments
+
     await db.commit()
     await db.refresh(room)
-    return room
+    return _build_room_response(room)
+
+
+def _build_room_response(room: Room) -> dict:
+    return {
+        "id": room.id,
+        "branch_id": room.branch_id,
+        "organization_id": room.organization_id,
+        "name": room.name,
+        "description": room.description,
+        "capacity": room.capacity,
+        "active": room.active,
+        "instrument_ids": [instrument.id for instrument in getattr(room, "instruments", [])],
+        "created_at": room.created_at,
+        "updated_at": room.updated_at,
+    }
+
+
+async def _load_instruments_by_ids(db: AsyncSession, instrument_ids: list[int]) -> list[Instrument]:
+    if not instrument_ids:
+        return []
+    unique_instrument_ids = list(dict.fromkeys(instrument_ids))
+    result = await db.execute(select(Instrument).where(Instrument.id.in_(unique_instrument_ids)))
+    instruments = result.scalars().all()
+    if len(instruments) != len(unique_instrument_ids):
+        found_ids = {i.id for i in instruments}
+        missing = [i for i in unique_instrument_ids if i not in found_ids]
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Instrumentos no encontrados: {missing}")
+    return instruments
 
 
 @router.get(
@@ -698,13 +739,14 @@ async def list_branch_rooms(
         return []
 
     result = await db.execute(
-        select(Room).where(
+        select(Room).options(selectinload(Room.instruments)).where(
             Room.branch_id == branch_id,
             Room.organization_id == current_teacher.organization_id,
             Room.active.is_(True),
         ).order_by(Room.name)
     )
-    return result.scalars().all()
+    rooms = result.scalars().all()
+    return [_build_room_response(room) for room in rooms]
 
 
 @router.get(
@@ -720,12 +762,13 @@ async def list_org_rooms(
         return []
 
     result = await db.execute(
-        select(Room).where(
+        select(Room).options(selectinload(Room.instruments)).where(
             Room.organization_id == current_teacher.organization_id,
             Room.active.is_(True),
         ).order_by(Room.name)
     )
-    return result.scalars().all()
+    rooms = result.scalars().all()
+    return [_build_room_response(room) for room in rooms]
 
 
 @router.patch(
@@ -736,6 +779,85 @@ async def list_org_rooms(
 async def update_room(
     room_id: int,
     data: RoomUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    result = await db.execute(
+        select(Room).options(selectinload(Room.instruments)).where(
+            Room.id == room_id,
+            Room.organization_id == current_teacher.organization_id,
+        )
+    )
+    room = result.scalar_one_or_none()
+    if not room:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Sala no encontrada en tu organización.",
+        )
+
+    if data.name is not None:
+        room.name = data.name
+    if data.description is not None:
+        room.description = data.description
+    if data.capacity is not None:
+        room.capacity = data.capacity
+
+    if data.instrument_ids is not None:
+        room.instruments = await _load_instruments_by_ids(db, data.instrument_ids)
+
+    if data.active is not None and data.active is False:
+        today = datetime_date.today()
+        active_schedules_count = await db.scalar(
+            select(func.count()).select_from(Schedule).where(
+                Schedule.room_id == room.id,
+                Schedule.active.is_(True),
+            )
+        )
+        future_classes_count = await db.scalar(
+            select(func.count()).select_from(Class).where(
+                Class.room_id == room.id,
+                Class.date >= today,
+                Class.status == ClassStatus.SCHEDULED,
+            )
+        )
+
+        if active_schedules_count or future_classes_count:
+            await db.execute(
+                update(Schedule)
+                .where(Schedule.room_id == room.id, Schedule.active.is_(True))
+                .values(room_id=None)
+            )
+            await db.execute(
+                update(Class)
+                .where(
+                    Class.room_id == room.id,
+                    Class.date >= today,
+                    Class.status == ClassStatus.SCHEDULED,
+                )
+                .values(room_id=None)
+            )
+        room.active = False
+    elif data.active is not None:
+        room.active = data.active
+
+    await db.commit()
+    await db.refresh(room)
+    return _build_room_response(room)
+
+
+@router.delete(
+    "/rooms/{room_id}",
+    response_model=dict,
+    summary="Eliminar sala",
+)
+async def delete_room(
+    room_id: int,
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
@@ -758,18 +880,90 @@ async def update_room(
             detail="Sala no encontrada en tu organización.",
         )
 
-    if data.name is not None:
-        room.name = data.name
-    if data.description is not None:
-        room.description = data.description
-    if data.capacity is not None:
-        room.capacity = data.capacity
-    if data.active is not None:
-        room.active = data.active
+    active_schedules_count = await db.scalar(
+        select(func.count()).select_from(Schedule).where(
+            Schedule.room_id == room.id,
+            Schedule.active.is_(True),
+        )
+    )
+    if active_schedules_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Esta sala tiene {active_schedules_count} horario(s) asignado(s). Reasigná los horarios antes de eliminar la sala.",
+        )
 
+    today = datetime_date.today()
+    future_classes_count = await db.scalar(
+        select(func.count()).select_from(Class).where(
+            Class.room_id == room.id,
+            Class.date >= today,
+            Class.status == ClassStatus.SCHEDULED,
+        )
+    )
+    if future_classes_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Esta sala tiene {future_classes_count} clase(s) futura(s) asignada(s).",
+        )
+
+    await db.delete(room)
     await db.commit()
-    await db.refresh(room)
-    return room
+    return {"deleted": True, "room_id": room_id}
+
+
+@router.delete(
+    "/branches/{branch_id}",
+    response_model=dict,
+    summary="Eliminar sucursal",
+)
+async def delete_branch(
+    branch_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    branch_result = await db.execute(
+        select(Branch).options(selectinload(Branch.rooms)).where(
+            Branch.id == branch_id,
+            Branch.organization_id == current_teacher.organization_id,
+        )
+    )
+    branch = branch_result.scalar_one_or_none()
+    if not branch:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Sucursal no encontrada en tu organización.",
+        )
+
+    today = datetime_date.today()
+    for room in branch.rooms or []:
+        active_schedules_count = await db.scalar(
+            select(func.count()).select_from(Schedule).where(
+                Schedule.room_id == room.id,
+                Schedule.active.is_(True),
+            )
+        )
+        future_classes_count = await db.scalar(
+            select(func.count()).select_from(Class).where(
+                Class.room_id == room.id,
+                Class.date >= today,
+                Class.status == ClassStatus.SCHEDULED,
+            )
+        )
+        if active_schedules_count or future_classes_count:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="La sucursal tiene salas con horarios asignados. Reasigná los horarios antes de eliminar la sucursal.",
+            )
+
+    await db.delete(branch)
+    await db.commit()
+    return {"deleted": True, "branch_id": branch_id}
 
 
 class AdminScheduleRoomItem(BaseModel):
