@@ -6,7 +6,8 @@ La relación con el alumno se obtiene a través de Payment → Enrollment.
 """
 
 from datetime import date
-from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, Text, UniqueConstraint
+from decimal import Decimal
+from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, Text, UniqueConstraint, Numeric
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List, TYPE_CHECKING
 import enum
@@ -104,9 +105,8 @@ class Invoice(Base, TimestampMixin):
     # MONTOS
     # ========================================
     
-    total_amount: Mapped["Decimal"] = mapped_column(
-        "total_amount",
-        None,
+    total_amount: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2),
         nullable=False,
         comment="Monto total del comprobante"
     )
