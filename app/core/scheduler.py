@@ -20,6 +20,7 @@ from datetime import date, datetime, timezone
 
 from app.core.database import get_db, async_session_maker
 from app.jobs.class_generator import generate_monthly_classes
+from app.jobs.financial_jobs import generate_billing_periods, generate_personnel_payments
 from app.models.job_run_log import JobRunLog
 
 
@@ -33,6 +34,130 @@ scheduler = AsyncIOScheduler()
 # ============================================
 # DEFINIR JOBS
 # ============================================
+
+async def monthly_billing_periods_job():
+    """
+    Job mensual: Genera BillingPeriod para enrollments activos
+
+    Ejecuta día 1 de cada mes a las 00:00 AM
+    Procesa todos los enrollments activos y genera períodos de cobro para el mes actual.
+    Aplica FeeDiscounts vigentes para calcular descuentos.
+
+    Lógica:
+    - Obtener todos los enrollments con status='active'
+    - Para cada enrollment, generar BillingPeriod si no existe para el mes
+    - Calcular descuento aplicando FeeDiscounts vigentes
+    - Loguear estadísticas
+    """
+    print("[JOB] Iniciando generación mensual de billing periods...")
+
+    # Obtener sesión de base de datos
+    async for db in get_db():
+        try:
+            # Intentar adquirir lock exclusivo con key distinta al job de clases
+            lock_result = await db.execute(
+                text("SELECT pg_try_advisory_lock(87654321)")
+            )
+            lock_acquired = lock_result.scalar()
+            if not lock_acquired:
+                print("[JOB] Otro worker ya está ejecutando el job de billing periods, omitiendo.")
+                break
+
+            result = await generate_billing_periods(db)
+
+            print(f"[JOB] Generación de billing periods completada:")
+            print(f"  - Períodos creados: {result['created']}")
+            print(f"  - Períodos saltados: {result['skipped']}")
+            print(f"  - Enrollments procesados: {result['enrollments_processed']}")
+
+            if result.get('errors'):
+                print(f"  - Errores: {len(result['errors'])}")
+                for error in result['errors'][:5]:  # Mostrar solo primeros 5
+                    print(f"    • {error}")
+
+            # Actualizar marcador de ejecución
+            current_month = date.today().strftime("%Y-%m")
+            log_entry = await db.get(JobRunLog, "monthly_billing_periods")
+            if log_entry:
+                log_entry.last_run_year_month = current_month
+                log_entry.last_run_at = datetime.now(timezone.utc)
+            else:
+                db.add(JobRunLog(
+                    job_name="monthly_billing_periods",
+                    last_run_year_month=current_month,
+                    last_run_at=datetime.now(timezone.utc)
+                ))
+
+            await db.commit()
+            print(f"[JOB] Marcador actualizado para {current_month}")
+
+        except Exception as e:
+            print(f"[JOB] Error en generación de billing periods: {str(e)}")
+
+        break  # Solo usar la primera sesión
+
+
+async def monthly_personnel_payments_job():
+    """
+    Job mensual: Genera PersonnelPayment para teachers activos
+
+    Ejecuta día 1 de cada mes a las 00:30 AM
+    Procesa todos los teachers activos y genera liquidaciones para el mes actual
+    (liquidando clases del mes anterior).
+
+    Lógica:
+    - Obtener todos los teachers con active=True
+    - Para cada teacher, generar PersonnelPayment si no existe para el mes
+    - Calcular según payment_mode (per_class, monthly_fixed, mixed)
+    - Loguear estadísticas
+    """
+    print("[JOB] Iniciando generación mensual de personnel payments...")
+
+    # Obtener sesión de base de datos
+    async for db in get_db():
+        try:
+            # Intentar adquirir lock exclusivo con key distinta
+            lock_result = await db.execute(
+                text("SELECT pg_try_advisory_lock(54321098)")
+            )
+            lock_acquired = lock_result.scalar()
+            if not lock_acquired:
+                print("[JOB] Otro worker ya está ejecutando el job de personnel payments, omitiendo.")
+                break
+
+            result = await generate_personnel_payments(db)
+
+            print(f"[JOB] Generación de personnel payments completada:")
+            print(f"  - Liquidaciones creadas: {result['created']}")
+            print(f"  - Liquidaciones saltadas: {result['skipped']}")
+            print(f"  - Teachers procesados: {result['teachers_processed']}")
+
+            if result.get('errors'):
+                print(f"  - Errores: {len(result['errors'])}")
+                for error in result['errors'][:5]:  # Mostrar solo primeros 5
+                    print(f"    • {error}")
+
+            # Actualizar marcador de ejecución
+            current_month = date.today().strftime("%Y-%m")
+            log_entry = await db.get(JobRunLog, "monthly_personnel_payments")
+            if log_entry:
+                log_entry.last_run_year_month = current_month
+                log_entry.last_run_at = datetime.now(timezone.utc)
+            else:
+                db.add(JobRunLog(
+                    job_name="monthly_personnel_payments",
+                    last_run_year_month=current_month,
+                    last_run_at=datetime.now(timezone.utc)
+                ))
+
+            await db.commit()
+            print(f"[JOB] Marcador actualizado para {current_month}")
+
+        except Exception as e:
+            print(f"[JOB] Error en generación de personnel payments: {str(e)}")
+
+        break  # Solo usar la primera sesión
+
 
 async def monthly_class_generation_job():
     """
@@ -173,7 +298,7 @@ def start_scheduler():
 
     Se ejecuta automáticamente en el startup event de FastAPI.
     """
-    # Job mensual: día 6 de cada mes a las 00:00 AM
+    # Job mensual: día 6 de cada mes a las 00:00 AM - Generación de clases
     scheduler.add_job(
         monthly_class_generation_job,
         trigger=CronTrigger(day=6, hour=0, minute=0),
@@ -182,8 +307,29 @@ def start_scheduler():
         replace_existing=True  # Reemplazar si ya existe (útil en desarrollo)
     )
 
+    # Job mensual: día 1 de cada mes a las 00:00 AM - Generación de billing periods
+    scheduler.add_job(
+        monthly_billing_periods_job,
+        trigger=CronTrigger(day=1, hour=0, minute=0),
+        id='generate_billing_periods',
+        name='Generación mensual de billing periods',
+        replace_existing=True
+    )
+
+    # Job mensual: día 1 de cada mes a las 00:30 AM - Generación de personnel payments
+    scheduler.add_job(
+        monthly_personnel_payments_job,
+        trigger=CronTrigger(day=1, hour=0, minute=30),
+        id='generate_personnel_payments',
+        name='Generación mensual de personnel payments',
+        replace_existing=True
+    )
+
     scheduler.start()
-    print("[SCHEDULER] ✅ Iniciado - Job mensual configurado (día 6, 00:00 AM)")
+    print("[SCHEDULER] ✅ Iniciado - Jobs mensuales configurados:")
+    print("  - Clases: día 6, 00:00 AM")
+    print("  - Billing Periods: día 1, 00:00 AM")
+    print("  - Personnel Payments: día 1, 00:30 AM")
 
 
 def shutdown_scheduler():

@@ -81,6 +81,40 @@ from .security_log import SecurityLog
 from .job_run_log import JobRunLog
 
 # ========================================
+# MODELOS FINANCIEROS
+# ========================================
+from .fee_discount import (
+    FeeDiscount,
+    DiscountType
+)
+
+from .billing_period import (
+    BillingPeriod,
+    BillingPeriodStatus
+)
+
+from .invoice import (
+    Invoice,
+    InvoiceStatus
+)
+
+from .payment import (
+    Payment,
+    PaymentConcept,
+    PaymentMethod
+)
+
+from .personnel_payment import (
+    PersonnelPayment,
+    PersonnelPaymentStatus
+)
+
+from .expense import (
+    Expense,
+    ExpenseCategory
+)
+
+# ========================================
 # EXPORTS
 # ========================================
 __all__ = [
@@ -103,6 +137,21 @@ __all__ = [
     "SuspensionHistory",
     "SecurityLog",
     "JobRunLog",
+    
+    # Modelos Financieros
+    "FeeDiscount",
+    "DiscountType",
+    "BillingPeriod",
+    "BillingPeriodStatus",
+    "Invoice",
+    "InvoiceStatus",
+    "Payment",
+    "PaymentConcept",
+    "PaymentMethod",
+    "PersonnelPayment",
+    "PersonnelPaymentStatus",
+    "Expense",
+    "ExpenseCategory",
     
     # Enums de Enrollment
     "EnrollmentStatus",

@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from .invitation import Invitation
     from .event import Event
     from .branch import Branch
+    from .invoice import Invoice
+    from .expense import Expense
 
 
 class Organization(Base, TimestampMixin):
@@ -98,6 +100,18 @@ class Organization(Base, TimestampMixin):
     )
 
     events: Mapped[List["Event"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    invoices: Mapped[List["Invoice"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    expenses: Mapped[List["Expense"]] = relationship(
         back_populates="organization",
         cascade="all, delete-orphan",
         lazy="noload"

@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from .room_assignment import RoomAssignment
     from .room_override import RoomOverride
     from .event import Event
+    from .personnel_payment import PersonnelPayment
 
 # Tabla de asociación Teacher <-> Instrument (many-to-many)
 teacher_instruments = Table(
@@ -177,6 +178,24 @@ class Teacher(Base, TimestampMixin):
         comment="Rol del teacher: org_admin|teacher|coordinator|administrative"
     )
 
+    # ========================================
+    # CONFIGURACIÓN DE PAGOS
+    # ========================================
+
+    payment_mode: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="per_class",
+        server_default="per_class",
+        comment="Modo de pago: per_class | monthly_fixed | mixed"
+    )
+
+    monthly_salary: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 2),
+        nullable=True,
+        comment="Salario mensual fijo (solo si payment_mode es monthly_fixed o mixed)"
+    )
+
     custom_permissions: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
@@ -250,6 +269,23 @@ class Teacher(Base, TimestampMixin):
         back_populates="teacher",
         cascade="all, delete-orphan",
         lazy="noload"
+    )
+
+    personnel_payments: Mapped[List["PersonnelPayment"]] = relationship(
+        back_populates="teacher",
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    # ========================================
+    # CONSTRAINTS
+    # ========================================
+
+    __table_args__ = (
+        CheckConstraint(
+            "payment_mode IN ('per_class', 'monthly_fixed', 'mixed')",
+            name='check_teacher_payment_mode_valid'
+        ),
     )
 
     def __repr__(self) -> str:

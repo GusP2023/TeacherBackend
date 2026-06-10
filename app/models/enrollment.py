@@ -31,7 +31,8 @@ Estados posibles:
 """
 
 from datetime import date
-from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, UniqueConstraint, ARRAY, JSON
+from decimal import Decimal
+from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, UniqueConstraint, ARRAY, JSON, Numeric
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List, TYPE_CHECKING
 import enum
@@ -47,6 +48,9 @@ if TYPE_CHECKING:
     from .schedule import Schedule
     from .class_model import Class
     from .suspension_history import SuspensionHistory
+    from .fee_discount import FeeDiscount
+    from .billing_period import BillingPeriod
+    from .payment import Payment
 
 
 class EnrollmentStatus(str, enum.Enum):
@@ -251,6 +255,24 @@ class Enrollment(Base, TimestampMixin):
     )
 
     # ========================================
+    # FINANZAS
+    # ========================================
+
+    base_monthly_fee: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2),
+        nullable=False,
+        default=0,
+        comment="Cuota mensual base acordada al inscribir al alumno"
+    )
+
+    enrollment_fee: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2),
+        nullable=False,
+        default=0,
+        comment="Matrícula cobrada al inicio (0 si no aplica)"
+    )
+
+    # ========================================
     # SINCRONIZACIÓN FUTURA
     # ========================================
     
@@ -296,6 +318,24 @@ class Enrollment(Base, TimestampMixin):
         back_populates="enrollment",
         cascade="all, delete-orphan",
         lazy="selectin"
+    )
+
+    fee_discounts: Mapped[List["FeeDiscount"]] = relationship(
+        back_populates="enrollment",
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    billing_periods: Mapped[List["BillingPeriod"]] = relationship(
+        back_populates="enrollment",
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    payments: Mapped[List["Payment"]] = relationship(
+        back_populates="enrollment",
+        cascade="all, delete-orphan",
+        lazy="noload"
     )
 
     # ========================================

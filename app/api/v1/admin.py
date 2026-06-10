@@ -13,7 +13,7 @@ Endpoints:
     GET   /admin/permissions/schema              → Ver qué permisos son configurables (con labels)
 """
 
-from datetime import date as datetime_date, time as time_module, datetime as datetime_type
+from datetime import date, date as datetime_date, time as time_module, datetime as datetime_type
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -30,7 +30,7 @@ from app.core.permissions import (
 )
 from app.models.attendance import Attendance, AttendanceStatus
 from app.models.branch import Branch
-from app.models.class_model import Class, ClassType, ClassStatus
+from app.models.class_model import Class, ClassFormat, ClassType, ClassStatus
 from app.models.event import Event, EVENT_TYPES
 from app.models.room import Room
 from app.models.schedule import DayOfWeek, Schedule
@@ -383,6 +383,307 @@ async def admin_update_teacher_instruments(
         await db.rollback()
         logger.exception("Error updating teacher instruments (admin) %s by %s: %s", teacher_id, getattr(current_teacher, 'id', None), e)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+# ── DASHBOARD ──
+
+class DashboardKpis(BaseModel):
+    active_students: int
+    active_teachers: int
+    classes_today: int
+    classes_today_unmarked: int
+    monthly_income: float
+    monthly_income_pct_marked: int
+
+
+class DashboardAlert(BaseModel):
+    type: str
+    severity: str
+    count: int
+    label: str
+
+
+class DashboardTeacher(BaseModel):
+    id: int
+    name: str
+    active_students: int
+    instruments: list[str]
+    unmarked_today: int
+    has_alerts: bool
+
+
+class DashboardResponse(BaseModel):
+    kpis: DashboardKpis
+    alerts: list[DashboardAlert]
+    teachers: list[DashboardTeacher]
+
+
+@router.get(
+    "/dashboard",
+    response_model=DashboardResponse,
+    summary="Datos del dashboard administrativo",
+)
+async def get_dashboard(
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.view_all")),
+):
+    if not current_teacher.organization_id:
+        return DashboardResponse(
+            kpis=DashboardKpis(
+                active_students=0,
+                active_teachers=0,
+                classes_today=0,
+                classes_today_unmarked=0,
+                monthly_income=0.0,
+                monthly_income_pct_marked=0,
+            ),
+            alerts=[],
+            teachers=[],
+        )
+
+    org_id = current_teacher.organization_id
+    today = date.today()
+    month_start = today.replace(day=1)
+
+    active_students_result = await db.execute(
+        select(func.count(func.distinct(Enrollment.student_id)))
+        .join(Teacher, Enrollment.teacher_id == Teacher.id)
+        .where(
+            Teacher.organization_id == org_id,
+            Enrollment.status == EnrollmentStatus.ACTIVE,
+        )
+    )
+    active_students = active_students_result.scalar_one() or 0
+
+    active_teachers_result = await db.execute(
+        select(func.count())
+        .select_from(Teacher)
+        .where(
+            Teacher.organization_id == org_id,
+            Teacher.active == True,
+        )
+    )
+    active_teachers = active_teachers_result.scalar_one() or 0
+
+    classes_today_result = await db.execute(
+        select(func.count())
+        .select_from(Class)
+        .join(Teacher, Class.teacher_id == Teacher.id)
+        .where(
+            Teacher.organization_id == org_id,
+            Class.date == today,
+            Class.status != ClassStatus.CANCELLED,
+        )
+    )
+    classes_today = classes_today_result.scalar_one() or 0
+
+    classes_today_unmarked_result = await db.execute(
+        select(func.count())
+        .select_from(Class)
+        .join(Teacher, Class.teacher_id == Teacher.id)
+        .where(
+            Teacher.organization_id == org_id,
+            Class.date == today,
+            Class.status == ClassStatus.SCHEDULED,
+        )
+    )
+    classes_today_unmarked = classes_today_unmarked_result.scalar_one() or 0
+
+    income_rows = await db.execute(
+        select(
+            Class.format,
+            Teacher.tariff_individual,
+            Teacher.tariff_group,
+        )
+        .select_from(Class)
+        .join(Teacher, Class.teacher_id == Teacher.id)
+        .join(Attendance, Attendance.class_id == Class.id)
+        .where(
+            Teacher.organization_id == org_id,
+            Class.date >= month_start,
+            Class.date <= today,
+            Class.status == ClassStatus.COMPLETED,
+            Attendance.status.in_([AttendanceStatus.PRESENT, AttendanceStatus.ABSENT]),
+        )
+    )
+
+    monthly_income = 0.0
+    for class_format, tariff_individual, tariff_group in income_rows.all():
+        if class_format == ClassFormat.INDIVIDUAL:
+            monthly_income += float(tariff_individual or 0)
+        else:
+            monthly_income += float(tariff_group or 0)
+
+    total_month_classes_result = await db.execute(
+        select(func.count())
+        .select_from(Class)
+        .join(Teacher, Class.teacher_id == Teacher.id)
+        .where(
+            Teacher.organization_id == org_id,
+            Class.date >= month_start,
+            Class.date <= today,
+            Class.status != ClassStatus.CANCELLED,
+        )
+    )
+    total_month_classes = total_month_classes_result.scalar_one() or 0
+
+    marked_month_classes_result = await db.execute(
+        select(func.count())
+        .select_from(Class)
+        .join(Teacher, Class.teacher_id == Teacher.id)
+        .where(
+            Teacher.organization_id == org_id,
+            Class.date >= month_start,
+            Class.date <= today,
+            Class.status == ClassStatus.COMPLETED,
+        )
+    )
+    marked_month_classes = marked_month_classes_result.scalar_one() or 0
+
+    monthly_income_pct_marked = (
+        int(marked_month_classes / total_month_classes * 100)
+        if total_month_classes > 0
+        else 0
+    )
+
+    overdue_classes_result = await db.execute(
+        select(func.count())
+        .select_from(Class)
+        .join(Teacher, Class.teacher_id == Teacher.id)
+        .where(
+            Teacher.organization_id == org_id,
+            Class.date < today,
+            Class.status == ClassStatus.SCHEDULED,
+        )
+    )
+    overdue_classes = overdue_classes_result.scalar_one() or 0
+
+    pending_credits_result = await db.execute(
+        select(func.count())
+        .select_from(Enrollment)
+        .join(Teacher, Enrollment.teacher_id == Teacher.id)
+        .where(
+            Teacher.organization_id == org_id,
+            Enrollment.credits > 0,
+        )
+    )
+    pending_credits = pending_credits_result.scalar_one() or 0
+
+    overdue_suspensions_result = await db.execute(
+        select(func.count())
+        .select_from(Enrollment)
+        .join(Teacher, Enrollment.teacher_id == Teacher.id)
+        .where(
+            Teacher.organization_id == org_id,
+            Enrollment.status == EnrollmentStatus.SUSPENDED,
+            Enrollment.suspended_until < today,
+        )
+    )
+    overdue_suspensions = overdue_suspensions_result.scalar_one() or 0
+
+    alerts: list[DashboardAlert] = []
+    if overdue_classes > 0:
+        alerts.append(DashboardAlert(
+            type="overdue_classes",
+            severity="error",
+            count=overdue_classes,
+            label=f"{overdue_classes} clase{'s' if overdue_classes != 1 else ''} sin marcar de días anteriores",
+        ))
+    if classes_today_unmarked > 0:
+        alerts.append(DashboardAlert(
+            type="unmarked_today",
+            severity="warning",
+            count=classes_today_unmarked,
+            label=f"{classes_today_unmarked} clase{'s' if classes_today_unmarked != 1 else ''} sin marcar hoy",
+        ))
+    if pending_credits > 0:
+        alerts.append(DashboardAlert(
+            type="pending_credits",
+            severity="warning",
+            count=pending_credits,
+            label=f"{pending_credits} alumno{'s' if pending_credits != 1 else ''} con créditos de recuperación sin usar",
+        ))
+    if overdue_suspensions > 0:
+        alerts.append(DashboardAlert(
+            type="overdue_suspensions",
+            severity="warning",
+            count=overdue_suspensions,
+            label=f"{overdue_suspensions} suspensión{'es' if overdue_suspensions != 1 else ''} vencida{'s' if overdue_suspensions != 1 else ''} sin reactivar",
+        ))
+
+    teachers_result = await db.execute(
+        select(Teacher)
+        .options(selectinload(Teacher.instruments))
+        .where(
+            Teacher.organization_id == org_id,
+            Teacher.active == True,
+        )
+        .order_by(Teacher.name)
+    )
+    teachers = teachers_result.scalars().all()
+
+    teacher_ids = [teacher.id for teacher in teachers]
+    active_students_by_teacher = {}
+    unmarked_today_by_teacher = {}
+
+    if teacher_ids:
+        active_students_rows = await db.execute(
+            select(
+                Enrollment.teacher_id,
+                func.count(func.distinct(Enrollment.student_id)),
+            )
+            .where(
+                Enrollment.teacher_id.in_(teacher_ids),
+                Enrollment.status == EnrollmentStatus.ACTIVE,
+            )
+            .group_by(Enrollment.teacher_id)
+        )
+        active_students_by_teacher = {
+            row[0]: row[1] or 0
+            for row in active_students_rows.all()
+        }
+
+        unmarked_today_rows = await db.execute(
+            select(
+                Class.teacher_id,
+                func.count(),
+            )
+            .where(
+                Class.teacher_id.in_(teacher_ids),
+                Class.date == today,
+                Class.status == ClassStatus.SCHEDULED,
+            )
+            .group_by(Class.teacher_id)
+        )
+        unmarked_today_by_teacher = {
+            row[0]: row[1] or 0
+            for row in unmarked_today_rows.all()
+        }
+
+    teacher_summaries = [
+        DashboardTeacher(
+            id=teacher.id,
+            name=teacher.name,
+            active_students=active_students_by_teacher.get(teacher.id, 0),
+            instruments=[instrument.name for instrument in teacher.instruments],
+            unmarked_today=unmarked_today_by_teacher.get(teacher.id, 0),
+            has_alerts=(unmarked_today_by_teacher.get(teacher.id, 0) > 0),
+        )
+        for teacher in teachers
+    ]
+
+    return DashboardResponse(
+        kpis=DashboardKpis(
+            active_students=active_students,
+            active_teachers=active_teachers,
+            classes_today=classes_today,
+            classes_today_unmarked=classes_today_unmarked,
+            monthly_income=monthly_income,
+            monthly_income_pct_marked=monthly_income_pct_marked,
+        ),
+        alerts=alerts,
+        teachers=teacher_summaries,
+    )
 
 
 # ────────────────────────────────────────────────────
