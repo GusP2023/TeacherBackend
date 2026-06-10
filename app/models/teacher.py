@@ -16,7 +16,7 @@ Relaciones:
 
 from datetime import date
 from decimal import Decimal
-from sqlalchemy import String, Boolean, Numeric, Integer, ForeignKey, Date, Text, Table, Column
+from sqlalchemy import String, Boolean, Numeric, Integer, ForeignKey, Date, Text, Table, Column, CheckConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List, TYPE_CHECKING
