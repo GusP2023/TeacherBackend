@@ -6,7 +6,8 @@ El campo 'recurring' es informativo (recordatorio visual), NO auto-genera regist
 """
 
 from datetime import date
-from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint
+from decimal import Decimal
+from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, Numeric, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import TYPE_CHECKING
 import enum
@@ -97,9 +98,8 @@ class Expense(Base, TimestampMixin):
     # MONTOS
     # ========================================
     
-    amount: Mapped["Decimal"] = mapped_column(
-        "amount",
-        None,
+    amount: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2),
         nullable=False,
         comment="Monto del gasto"
     )
@@ -133,7 +133,7 @@ class Expense(Base, TimestampMixin):
     # ========================================
     
     recurring: Mapped[bool] = mapped_column(
-        None,
+        Boolean,
         default=False,
         nullable=False,
         comment="Indica si es un gasto habitual (solo informativo, no auto-genera registros)"
