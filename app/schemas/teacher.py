@@ -50,6 +50,8 @@ class TeacherUpdate(BaseModel):
     password: str | None = Field(None, min_length=8, max_length=100)
     tariff_individual: Decimal | None = Field(None, gt=0, decimal_places=2)
     tariff_group: Decimal | None = Field(None, gt=0, decimal_places=2)
+    payment_mode:    str | None = Field(None, pattern="^(per_class|monthly_fixed|mixed)$")
+    monthly_salary:  Decimal | None = Field(None, gt=0, decimal_places=2)
 
 
 class TeacherResponse(TeacherBase):
@@ -68,5 +70,7 @@ class TeacherResponse(TeacherBase):
     organization_id: int | None = None
     instruments: list[InstrumentSimple] = []
     permissions: dict[str, bool] = {}
+    payment_mode:   str = "per_class"
+    monthly_salary: Decimal | None = None
 
     model_config = ConfigDict(from_attributes=True)

@@ -12,6 +12,7 @@ IMPORTANTE:
 - credits: créditos de recuperación (license da +1, usar recuperación -1)
 """
 from datetime import date, datetime
+from decimal import Decimal
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 
@@ -42,6 +43,16 @@ class EnrollmentBase(BaseModel):
     partial_sessions: List[dict] = Field(
         default_factory=list,
         description="Array de sesiones parciales de recuperación: [{date: 'YYYY-MM-DD', time: 'HH:MM', minutes: 15|30}]"
+    )
+    base_monthly_fee: Decimal = Field(
+        default=Decimal("0.00"),
+        ge=0,
+        description="Cuota mensual base acordada al inscribir al alumno"
+    )
+    enrollment_fee: Decimal = Field(
+        default=Decimal("0.00"),
+        ge=0,
+        description="Matrícula cobrada al inicio (0 si no aplica)"
     )
 
 
@@ -89,6 +100,16 @@ class EnrollmentUpdate(BaseModel):
     partial_sessions: List[dict] | None = Field(
         None,
         description="Array de sesiones parciales de recuperación: [{date: 'YYYY-MM-DD', time: 'HH:MM', minutes: 15|30}]"
+    )
+    base_monthly_fee: Decimal | None = Field(
+        None,
+        ge=0,
+        description="Cuota mensual base"
+    )
+    enrollment_fee: Decimal | None = Field(
+        None,
+        ge=0,
+        description="Matrícula de inscripción"
     )
 
 
@@ -207,6 +228,8 @@ class EnrollmentResponse(EnrollmentBase):
     updated_at: datetime
     teacher_name: Optional[str] = None    # NUEVO
     instrument_name: Optional[str] = None # NUEVO
+    base_monthly_fee: Decimal = Decimal("0.00")
+    enrollment_fee: Decimal = Decimal("0.00")
 
     # Permite leer desde objetos SQLAlchemy
     model_config = ConfigDict(from_attributes=True)

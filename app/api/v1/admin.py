@@ -13,14 +13,14 @@ Endpoints:
     GET   /admin/permissions/schema              → Ver qué permisos son configurables (con labels)
 """
 
-from datetime import date, date as datetime_date, time as time_module, datetime as datetime_type
+from datetime import date, date as datetime_date, time as time_module, datetime as datetime_type, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func, update
+from sqlalchemy import select, or_, func, update, and_
 from sqlalchemy.orm import selectinload
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 from app.core.database import get_db
 from app.core.security import require_permission
@@ -36,17 +36,26 @@ from app.models.room import Room
 from app.models.schedule import DayOfWeek, Schedule
 from app.models.student import Student
 from app.models.teacher import Teacher, VALID_ROLES
+from app.models.teacher_availability import TeacherAvailability
 from app.models.enrollment import Enrollment, EnrollmentStatus
+from app.models.personnel_payment import PersonnelPayment, PersonnelPaymentStatus
 from app.schemas.invitation import InvitationCreate, InvitationResponse
 from app.schemas.student import StudentResponse
 from app.schemas.teacher import TeacherResponse
 from app.schemas.teacher import TeacherUpdate
+from app.schemas.personnel_payment import (
+    PersonnelPaymentPreviewRequest, PersonnelPaymentPreviewResponse,
+    PersonnelPaymentCreate, PersonnelPaymentUpdate,
+    PersonnelPaymentPayRequest, PersonnelPaymentResponse,
+    PendingAlertTeacher,
+)
 from app.api.v1.websocket import notify_data_change
 import logging
 
 from app.crud import invitation as invitation_crud
 from app.crud import teacher as teacher_crud
 from app.models.instrument import Instrument
+from app.services.financial_generator import calculate_teacher_payment
 
 logger = logging.getLogger(__name__)
 
@@ -2332,3 +2341,679 @@ async def admin_delete_class_attendance(
     await db.commit()
     await notify_data_change(class_obj.teacher_id, "attendance", "delete", class_id)
     return {"deleted": True, "class_id": class_id}
+
+
+# ────────────────────────────────────────────────────
+# DISPONIBILIDAD DE PROFESORES
+# ────────────────────────────────────────────────────
+
+class AvailabilityCreate(BaseModel):
+    day: str = Field(..., pattern="^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$")
+    time_start: time_module
+    time_end: time_module
+
+    @model_validator(mode='after')
+    def validate_range(self):
+        if self.time_start >= self.time_end:
+            raise ValueError("time_start debe ser anterior a time_end")
+        return self
+
+
+class AvailabilityUpdate(BaseModel):
+    day: str | None = Field(None, pattern="^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$")
+    time_start: time_module | None = None
+    time_end: time_module | None = None
+    active: bool | None = None
+
+    @model_validator(mode='after')
+    def validate_range(self):
+        if self.time_start and self.time_end:
+            if self.time_start >= self.time_end:
+                raise ValueError("time_start debe ser anterior a time_end")
+        return self
+
+
+class AvailabilityResponse(BaseModel):
+    id: int
+    teacher_id: int
+    day: str
+    time_start: time_module
+    time_end: time_module
+    active: bool
+    created_at: datetime_type
+    updated_at: datetime_type
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Función auxiliar para verificar que un teacher pertenece a la organización
+async def _get_teacher_for_org(db: AsyncSession, teacher_id: int, org_id: int) -> Teacher:
+    """Verifica que teacher_id pertenece a la organización org_id."""
+    result = await db.execute(
+        select(Teacher).where(
+            Teacher.id == teacher_id,
+            Teacher.organization_id == org_id
+        )
+    )
+    teacher = result.scalar_one_or_none()
+    if not teacher:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Profesor no encontrado en tu organización."
+        )
+    return teacher
+
+
+# ────────────────────────────────────────────────────
+# GET /admin/teachers/{teacher_id}/availability
+# ────────────────────────────────────────────────────
+@router.get(
+    "/teachers/{teacher_id}/availability",
+    response_model=list[AvailabilityResponse],
+    summary="Listar disponibilidad de un profesor",
+)
+async def list_teacher_availability(
+    teacher_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Lista todos los bloques de disponibilidad de un profesor.
+    Incluye bloques activos e inactivos, ordenados por día y hora.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    await _get_teacher_for_org(db, teacher_id, current_teacher.organization_id)
+
+    result = await db.execute(
+        select(TeacherAvailability)
+        .where(TeacherAvailability.teacher_id == teacher_id)
+        .order_by(
+            # Ordenar por día de la semana (lunes→domingo)
+            func.case(
+                *( (TeacherAvailability.day == day, i) for i, day in enumerate(
+                    ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                ) ),
+                else_=99
+            ),
+            TeacherAvailability.time_start
+        )
+    )
+    return result.scalars().all()
+
+
+# ────────────────────────────────────────────────────
+# POST /admin/teachers/{teacher_id}/availability
+# ────────────────────────────────────────────────────
+@router.post(
+    "/teachers/{teacher_id}/availability",
+    response_model=AvailabilityResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear bloque de disponibilidad",
+)
+async def create_teacher_availability(
+    teacher_id: int,
+    data: AvailabilityCreate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Crea un nuevo bloque de disponibilidad para un profesor.
+    Verifica que no haya solapamiento con otros bloques activos del mismo día.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    await _get_teacher_for_org(db, teacher_id, current_teacher.organization_id)
+
+    # Verificar solapamiento con disponibilidades activas del mismo día
+    overlap_result = await db.execute(
+        select(TeacherAvailability).where(
+            TeacherAvailability.teacher_id == teacher_id,
+            TeacherAvailability.day == data.day,
+            TeacherAvailability.active == True,
+            TeacherAvailability.time_start < data.time_end,
+            TeacherAvailability.time_end > data.time_start
+        )
+    )
+    if overlap_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya existe un bloque de disponibilidad en ese día que se solapa con el horario indicado."
+        )
+
+    availability = TeacherAvailability(
+        teacher_id=teacher_id,
+        day=data.day,
+        time_start=data.time_start,
+        time_end=data.time_end,
+        active=True
+    )
+
+    db.add(availability)
+    await db.commit()
+    await db.refresh(availability)
+
+    return availability
+
+
+# ────────────────────────────────────────────────────
+# PATCH /admin/teachers/{teacher_id}/availability/{availability_id}
+# ────────────────────────────────────────────────────
+@router.patch(
+    "/teachers/{teacher_id}/availability/{availability_id}",
+    response_model=AvailabilityResponse,
+    summary="Actualizar bloque de disponibilidad",
+)
+async def update_teacher_availability(
+    teacher_id: int,
+    availability_id: int,
+    data: AvailabilityUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Actualiza un bloque de disponibilidad.
+    Si se modifican day/time_start/time_end, verifica que no haya solapamiento.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    await _get_teacher_for_org(db, teacher_id, current_teacher.organization_id)
+
+    result = await db.execute(
+        select(TeacherAvailability).where(
+            TeacherAvailability.id == availability_id,
+            TeacherAvailability.teacher_id == teacher_id
+        )
+    )
+    availability = result.scalar_one_or_none()
+    if not availability:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bloque de disponibilidad no encontrado."
+        )
+
+    # Si se modifican day/time_start/time_end, verificar solapamiento
+    if data.day or data.time_start or data.time_end:
+        new_day = data.day if data.day is not None else availability.day
+        new_time_start = data.time_start if data.time_start is not None else availability.time_start
+        new_time_end = data.time_end if data.time_end is not None else availability.time_end
+
+        overlap_result = await db.execute(
+            select(TeacherAvailability).where(
+                TeacherAvailability.teacher_id == teacher_id,
+                TeacherAvailability.day == new_day,
+                TeacherAvailability.active == True,
+                TeacherAvailability.time_start < new_time_end,
+                TeacherAvailability.time_end > new_time_start,
+                TeacherAvailability.id != availability_id  # Excluir el registro actual
+            )
+        )
+        if overlap_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Ya existe un bloque de disponibilidad en ese día que se solapa con el horario indicado."
+            )
+
+    # Aplicar cambios
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(availability, field, value)
+
+    await db.commit()
+    await db.refresh(availability)
+
+    return availability
+
+
+# ────────────────────────────────────────────────────
+# DELETE /admin/teachers/{teacher_id}/availability/{availability_id}
+# ────────────────────────────────────────────────────
+@router.delete(
+    "/teachers/{teacher_id}/availability/{availability_id}",
+    summary="Eliminar bloque de disponibilidad",
+)
+async def delete_teacher_availability(
+    teacher_id: int,
+    availability_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Elimina un bloque de disponibilidad.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    await _get_teacher_for_org(db, teacher_id, current_teacher.organization_id)
+
+    result = await db.execute(
+        select(TeacherAvailability).where(
+            TeacherAvailability.id == availability_id,
+            TeacherAvailability.teacher_id == teacher_id
+        )
+    )
+    availability = result.scalar_one_or_none()
+    if not availability:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Bloque de disponibilidad no encontrado."
+        )
+
+    await db.delete(availability)
+    await db.commit()
+
+    return {"deleted": True, "availability_id": availability_id}
+
+
+# ────────────────────────────────────────────────────
+# GET /admin/availability (endpoint de lectura para la Agenda)
+# ────────────────────────────────────────────────────
+@router.get(
+    "/availability",
+    response_model=list[AvailabilityResponse],
+    summary="Listar disponibilidad de profesores (para Agenda)",
+)
+async def list_availability(
+    teacher_id: int | None = Query(None, description="Filtrar por teacher_id"),
+    day: str | None = Query(None, description="Filtrar por día de la semana"),
+    active_only: bool = Query(True, description="Solo bloques activos"),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Lista disponibilidad de profesores con filtros opcionales.
+    Útil para la Agenda para mostrar disponibilidad de profesores.
+    """
+    if not current_teacher.organization_id:
+        return []
+
+    query = select(TeacherAvailability).join(Teacher).where(
+        Teacher.organization_id == current_teacher.organization_id
+    )
+
+    if teacher_id is not None:
+        query = query.where(TeacherAvailability.teacher_id == teacher_id)
+
+    if day is not None:
+        query = query.where(TeacherAvailability.day == day)
+
+    if active_only:
+        query = query.where(TeacherAvailability.active == True)
+
+    query = query.order_by(
+        TeacherAvailability.teacher_id,
+        func.case(
+            *( (TeacherAvailability.day == d, i) for i, d in enumerate(
+                ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+            ) ),
+            else_=99
+        ),
+        TeacherAvailability.time_start
+    )
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+# ════════════════════════════════════════════════════════════
+# PERSONNEL PAYMENTS
+# ════════════════════════════════════════════════════════════
+
+# ────────────────────────────────────────────────────
+# POST /admin/personnel-payments/preview
+# ────────────────────────────────────────────────────
+@router.post(
+    "/personnel-payments/preview",
+    response_model=PersonnelPaymentPreviewResponse,
+    summary="Calcular pago de personal sin guardar",
+)
+async def preview_personnel_payment(
+    body: PersonnelPaymentPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Calcula clases cobrables y monto para un teacher en el período indicado.
+    No escribe nada en la base de datos. Usar antes de crear el pago.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    teacher = await _get_teacher_for_org(db, body.teacher_id, current_teacher.organization_id)
+
+    if body.period_from > body.period_to:
+        raise HTTPException(status_code=400, detail="period_from debe ser anterior o igual a period_to.")
+
+    calc = await calculate_teacher_payment(db, teacher, body.period_from, body.period_to)
+
+    return PersonnelPaymentPreviewResponse(
+        teacher_id=teacher.id,
+        teacher_name=teacher.name,
+        **calc,
+    )
+
+
+# ────────────────────────────────────────────────────
+# POST /admin/personnel-payments
+# ────────────────────────────────────────────────────
+@router.post(
+    "/personnel-payments",
+    response_model=PersonnelPaymentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear liquidación de pago de personal",
+)
+async def create_personnel_payment(
+    body: PersonnelPaymentCreate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Crea un PersonnelPayment con status=pending.
+    El monto se calcula automáticamente en base al período y las clases marcadas.
+    El campo adjustment permite agregar bono (+) o descuento (-) manual.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    teacher = await _get_teacher_for_org(db, body.teacher_id, current_teacher.organization_id)
+
+    if body.period_from > body.period_to:
+        raise HTTPException(status_code=400, detail="period_from debe ser anterior o igual a period_to.")
+
+    # Verificar que no exista ya un pago para este período exacto
+    existing = await db.execute(
+        select(PersonnelPayment).where(
+            PersonnelPayment.teacher_id == teacher.id,
+            PersonnelPayment.period_from == body.period_from,
+            PersonnelPayment.period_to   == body.period_to,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail="Ya existe un pago para este profesor y período."
+        )
+
+    calc = await calculate_teacher_payment(db, teacher, body.period_from, body.period_to)
+
+    total = calc["amount_calculated"] + body.adjustment
+
+    payment = PersonnelPayment(
+        teacher_id=teacher.id,
+        period_from=body.period_from,
+        period_to=body.period_to,
+        adjustment=body.adjustment,
+        notes=body.notes,
+        total_amount=total,
+        status=PersonnelPaymentStatus.PENDING,
+        **calc,
+    )
+    db.add(payment)
+    await db.commit()
+    await db.refresh(payment)
+    return payment
+
+
+# ────────────────────────────────────────────────────
+# GET /admin/personnel-payments
+# ────────────────────────────────────────────────────
+@router.get(
+    "/personnel-payments",
+    response_model=list[PersonnelPaymentResponse],
+    summary="Listar liquidaciones de personal",
+)
+async def list_personnel_payments(
+    teacher_id: int | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+    from_date: date | None = Query(None, description="Filtrar period_from >= from_date"),
+    to_date: date | None = Query(None, description="Filtrar period_to <= to_date"),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    if not current_teacher.organization_id:
+        return []
+
+    query = (
+        select(PersonnelPayment)
+        .join(Teacher, Teacher.id == PersonnelPayment.teacher_id)
+        .where(Teacher.organization_id == current_teacher.organization_id)
+        .order_by(PersonnelPayment.period_from.desc(), Teacher.name)
+    )
+
+    if teacher_id is not None:
+        query = query.where(PersonnelPayment.teacher_id == teacher_id)
+    if status_filter is not None:
+        query = query.where(PersonnelPayment.status == status_filter)
+    if from_date is not None:
+        query = query.where(PersonnelPayment.period_from >= from_date)
+    if to_date is not None:
+        query = query.where(PersonnelPayment.period_to <= to_date)
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+# ────────────────────────────────────────────────────
+# PATCH /admin/personnel-payments/{payment_id}
+# ────────────────────────────────────────────────────
+@router.patch(
+    "/personnel-payments/{payment_id}",
+    response_model=PersonnelPaymentResponse,
+    summary="Editar liquidación pendiente (y opcionalmente recalcular)",
+)
+async def update_personnel_payment(
+    payment_id: int,
+    body: PersonnelPaymentUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Edita adjustment y/o notes de un pago en status=pending.
+    Si se envía period_from o period_to, recalcula las clases y amount_calculated.
+    Solo funciona mientras el pago esté en status=pending.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(PersonnelPayment)
+        .join(Teacher, Teacher.id == PersonnelPayment.teacher_id)
+        .where(
+            PersonnelPayment.id == payment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    payment = result.scalar_one_or_none()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Liquidación no encontrada.")
+    if payment.status != PersonnelPaymentStatus.PENDING:
+        raise HTTPException(status_code=409, detail="Solo se pueden editar liquidaciones en estado pending.")
+
+    # Si cambia el período, recalcular
+    recalculate = body.period_from is not None or body.period_to is not None
+    new_period_from = body.period_from or payment.period_from
+    new_period_to   = body.period_to   or payment.period_to
+
+    if new_period_from > new_period_to:
+        raise HTTPException(status_code=400, detail="period_from debe ser anterior o igual a period_to.")
+
+    if recalculate:
+        teacher = await _get_teacher_for_org(db, payment.teacher_id, current_teacher.organization_id)
+        calc = await calculate_teacher_payment(db, teacher, new_period_from, new_period_to)
+        for field, value in calc.items():
+            setattr(payment, field, value)
+        payment.period_from = new_period_from
+        payment.period_to   = new_period_to
+
+    if body.adjustment is not None:
+        payment.adjustment = body.adjustment
+    if body.notes is not None:
+        payment.notes = body.notes
+
+    payment.total_amount = payment.amount_calculated + payment.adjustment
+
+    await db.commit()
+    await db.refresh(payment)
+    return payment
+
+
+# ────────────────────────────────────────────────────
+# POST /admin/personnel-payments/{payment_id}/pay
+# ────────────────────────────────────────────────────
+@router.post(
+    "/personnel-payments/{payment_id}/pay",
+    response_model=PersonnelPaymentResponse,
+    summary="Marcar liquidación como pagada",
+)
+async def pay_personnel_payment(
+    payment_id: int,
+    body: PersonnelPaymentPayRequest,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Marca un pago pending como paid y registra los datos de la factura emitida
+    por el profesor: número, fecha y notas opcionales.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(PersonnelPayment)
+        .join(Teacher, Teacher.id == PersonnelPayment.teacher_id)
+        .where(
+            PersonnelPayment.id == payment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    payment = result.scalar_one_or_none()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Liquidación no encontrada.")
+    if payment.status != PersonnelPaymentStatus.PENDING:
+        raise HTTPException(status_code=409, detail="La liquidación ya fue pagada.")
+
+    payment.status         = PersonnelPaymentStatus.PAID
+    payment.invoice_number = body.invoice_number
+    payment.invoice_date   = body.invoice_date
+    payment.invoice_notes  = body.invoice_notes
+
+    await db.commit()
+    await db.refresh(payment)
+    return payment
+
+
+# ────────────────────────────────────────────────────
+# DELETE /admin/personnel-payments/{payment_id}
+# ────────────────────────────────────────────────────
+@router.delete(
+    "/personnel-payments/{payment_id}",
+    summary="Eliminar liquidación pendiente",
+)
+async def delete_personnel_payment(
+    payment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Elimina una liquidación SOLO si está en status=pending.
+    Usar para corregir errores antes de confirmar el pago.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(PersonnelPayment)
+        .join(Teacher, Teacher.id == PersonnelPayment.teacher_id)
+        .where(
+            PersonnelPayment.id == payment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    payment = result.scalar_one_or_none()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Liquidación no encontrada.")
+    if payment.status != PersonnelPaymentStatus.PENDING:
+        raise HTTPException(status_code=409, detail="Solo se pueden eliminar liquidaciones en estado pending.")
+
+    await db.delete(payment)
+    await db.commit()
+    return {"deleted": True, "payment_id": payment_id}
+
+
+# ────────────────────────────────────────────────────
+# GET /admin/personnel-payments/pending-alert
+# ────────────────────────────────────────────────────
+@router.get(
+    "/personnel-payments/pending-alert",
+    response_model=list[PendingAlertTeacher],
+    summary="Teachers activos sin pago generado en el mes anterior",
+)
+async def personnel_payments_pending_alert(
+    year:  int | None = Query(None, description="Año a verificar. Default: mes anterior"),
+    month: int | None = Query(None, description="Mes a verificar (1-12). Default: mes anterior"),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Devuelve los teachers activos que NO tienen ningún PersonnelPayment
+    cuyo period_from cae dentro del mes indicado.
+    Útil para alertar: "Faltan X profesores sin liquidación para este mes".
+    Default: verifica el mes anterior al actual.
+    """
+    if not current_teacher.organization_id:
+        return []
+
+    today = date.today()
+    if year is None or month is None:
+        # Mes anterior
+        if today.month == 1:
+            check_year, check_month = today.year - 1, 12
+        else:
+            check_year, check_month = today.year, today.month - 1
+    else:
+        check_year, check_month = year, month
+
+    month_start = date(check_year, check_month, 1)
+    if check_month == 12:
+        month_end = date(check_year + 1, 1, 1) - timedelta(days=1)
+    else:
+        month_end = date(check_year, check_month + 1, 1) - timedelta(days=1)
+
+    # Teachers activos de la organización
+    teachers_result = await db.execute(
+        select(Teacher).where(
+            Teacher.organization_id == current_teacher.organization_id,
+            Teacher.active == True,
+        )
+    )
+    all_teachers = teachers_result.scalars().all()
+
+    # Teachers que YA tienen un pago con period_from en ese mes
+    paid_result = await db.execute(
+        select(PersonnelPayment.teacher_id).where(
+            PersonnelPayment.teacher_id.in_([t.id for t in all_teachers]),
+            PersonnelPayment.period_from >= month_start,
+            PersonnelPayment.period_from <= month_end,
+        )
+    )
+    teachers_with_payment = {row[0] for row in paid_result.all()}
+
+    return [
+        PendingAlertTeacher(id=t.id, name=t.name, payment_mode=t.payment_mode)
+        for t in all_teachers
+        if t.id not in teachers_with_payment
+    ]

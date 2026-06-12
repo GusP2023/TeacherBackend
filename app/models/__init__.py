@@ -32,6 +32,7 @@ from .invitation import Invitation
 # ========================================
 from .teacher import Teacher
 from .instrument import Instrument
+from .teacher_availability import TeacherAvailability
 
 # ========================================
 # MODELOS CON POCAS DEPENDENCIAS
@@ -129,6 +130,7 @@ __all__ = [
     # Modelos
     "Teacher",
     "Instrument",
+    "TeacherAvailability",
     "Student",
     "Enrollment",
     "Schedule",
