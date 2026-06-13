@@ -14,6 +14,7 @@ Endpoints:
 """
 
 from datetime import date, date as datetime_date, time as time_module, datetime as datetime_type, timedelta
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -38,11 +39,18 @@ from app.models.student import Student
 from app.models.teacher import Teacher, VALID_ROLES
 from app.models.teacher_availability import TeacherAvailability
 from app.models.enrollment import Enrollment, EnrollmentStatus
+from app.models.billing_period import BillingPeriod, BillingPeriodStatus
+from app.models.payment import Payment, PaymentConcept, PaymentMethod
 from app.models.personnel_payment import PersonnelPayment, PersonnelPaymentStatus
 from app.schemas.invitation import InvitationCreate, InvitationResponse
 from app.schemas.student import StudentResponse
 from app.schemas.teacher import TeacherResponse
 from app.schemas.teacher import TeacherUpdate
+from app.schemas.billing import (
+    BillingPeriodResponse, BillingPeriodUpdate, GenerateBillingPeriodsResponse,
+    PaymentCreate, PaymentResponse,
+    StudentBrief, EnrollmentBrief,
+)
 from app.schemas.personnel_payment import (
     PersonnelPaymentPreviewRequest, PersonnelPaymentPreviewResponse,
     PersonnelPaymentCreate, PersonnelPaymentUpdate,
@@ -55,6 +63,7 @@ import logging
 from app.crud import invitation as invitation_crud
 from app.crud import teacher as teacher_crud
 from app.models.instrument import Instrument
+from app.jobs.financial_jobs import generate_billing_periods
 from app.services.financial_generator import calculate_teacher_payment
 
 logger = logging.getLogger(__name__)
@@ -393,6 +402,527 @@ async def admin_update_teacher_instruments(
         await db.rollback()
         logger.exception("Error updating teacher instruments (admin) %s by %s: %s", teacher_id, getattr(current_teacher, 'id', None), e)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+async def _recalculate_billing_status(db: AsyncSession, billing_period_id: int) -> None:
+    """Recalcula el status de un BillingPeriod según la suma de pagos recibidos."""
+    bp_result = await db.execute(
+        select(BillingPeriod).where(BillingPeriod.id == billing_period_id)
+    )
+    bp = bp_result.scalar_one_or_none()
+    if not bp or bp.status == BillingPeriodStatus.WAIVED:
+        return
+
+    sum_result = await db.execute(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.billing_period_id == billing_period_id
+        )
+    )
+    amount_paid = Decimal(str(sum_result.scalar_one()))
+
+    if amount_paid <= 0:
+        bp.status = BillingPeriodStatus.PENDING
+    elif amount_paid < bp.final_amount:
+        bp.status = BillingPeriodStatus.PARTIAL
+    else:
+        bp.status = BillingPeriodStatus.PAID
+
+
+# ════════════════════════════════════════════════════════════════════
+# REVERT PERSONNEL PAYMENT
+# ════════════════════════════════════════════════════════════════════
+
+@router.post(
+    "/personnel-payments/{payment_id}/revert",
+    response_model=PersonnelPaymentResponse,
+    summary="Revertir un pago pagado a pendiente",
+)
+async def revert_personnel_payment(
+    payment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Revierte un PersonnelPayment de status=paid a status=pending.
+    Limpia los datos de factura. Usar cuando se registró un pago por error.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(PersonnelPayment)
+        .join(Teacher, Teacher.id == PersonnelPayment.teacher_id)
+        .where(
+            PersonnelPayment.id == payment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    payment = result.scalar_one_or_none()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Liquidación no encontrada.")
+    if payment.status != PersonnelPaymentStatus.PAID:
+        raise HTTPException(status_code=409, detail="Solo se pueden revertir liquidaciones pagadas.")
+
+    payment.status         = PersonnelPaymentStatus.PENDING
+    payment.invoice_number = None
+    payment.invoice_date   = None
+    payment.invoice_notes  = None
+
+    await db.commit()
+    await db.refresh(payment)
+    return payment
+
+
+# ════════════════════════════════════════════════════════════════════
+# BILLING PERIODS
+# ════════════════════════════════════════════════════════════════════
+
+@router.post(
+    "/billing-periods/generate",
+    response_model=GenerateBillingPeriodsResponse,
+    summary="Generar cobros mensuales para todos los enrollments activos",
+)
+async def generate_billing_periods_endpoint(
+    year:  int | None = Query(None, description="Año del período. Default: año actual"),
+    month: int | None = Query(None, description="Mes del período (1-12). Default: mes actual"),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Genera un BillingPeriod por cada Enrollment activo de la organización
+    para el mes indicado. Idempotente: no duplica si ya existe.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    today = date.today()
+    target_year  = year  if year  is not None else today.year
+    target_month = month if month is not None else today.month
+
+    if not (1 <= target_month <= 12):
+        raise HTTPException(status_code=400, detail="Mes inválido (1-12).")
+
+    stats = await generate_billing_periods(
+        db=db,
+        target_date=date(target_year, target_month, 1),
+        organization_id=current_teacher.organization_id,
+    )
+    return stats
+
+
+@router.get(
+    "/billing-periods",
+    response_model=list[BillingPeriodResponse],
+    summary="Listar períodos de cobro de la organización",
+)
+async def list_billing_periods(
+    year:         int | None = Query(None),
+    month:        int | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+    student_id:   int | None = Query(None),
+    teacher_id:   int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    if not current_teacher.organization_id:
+        return []
+
+    query = (
+        select(BillingPeriod)
+        .join(Enrollment, Enrollment.id == BillingPeriod.enrollment_id)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(Teacher.organization_id == current_teacher.organization_id)
+        .order_by(BillingPeriod.period_year.desc(), BillingPeriod.period_month.desc())
+    )
+
+    if year is not None:
+        query = query.where(BillingPeriod.period_year == year)
+    if month is not None:
+        query = query.where(BillingPeriod.period_month == month)
+    if status_filter is not None:
+        query = query.where(BillingPeriod.status == status_filter)
+    if student_id is not None:
+        query = query.where(Enrollment.student_id == student_id)
+    if teacher_id is not None:
+        query = query.where(Enrollment.teacher_id == teacher_id)
+
+    result = await db.execute(query)
+    billing_periods = result.scalars().all()
+
+    bp_ids = [bp.id for bp in billing_periods]
+    paid_map: dict[int, Decimal] = {}
+    if bp_ids:
+        paid_result = await db.execute(
+            select(Payment.billing_period_id, func.sum(Payment.amount))
+            .where(Payment.billing_period_id.in_(bp_ids))
+            .group_by(Payment.billing_period_id)
+        )
+        paid_map = {row[0]: Decimal(str(row[1])) for row in paid_result.all()}
+
+    responses = []
+    for bp in billing_periods:
+        enrollment = bp.enrollment
+        student = enrollment.student if enrollment else None
+        instrument = enrollment.instrument if enrollment else None
+        responses.append(BillingPeriodResponse(
+            id=bp.id,
+            enrollment_id=bp.enrollment_id,
+            student=StudentBrief(
+                id=student.id if student else 0,
+                name=student.name if student else "—",
+            ),
+            enrollment=EnrollmentBrief(
+                id=enrollment.id if enrollment else 0,
+                instrument_name=instrument.name if instrument else "—",
+                format=enrollment.format.value if enrollment else "—",
+            ),
+            period_year=bp.period_year,
+            period_month=bp.period_month,
+            base_amount=bp.base_amount,
+            discount_applied=bp.discount_applied,
+            final_amount=bp.final_amount,
+            amount_paid=paid_map.get(bp.id, Decimal("0.00")),
+            status=bp.status.value if hasattr(bp.status, 'value') else bp.status,
+            due_date=bp.due_date,
+            created_at=bp.created_at,
+            updated_at=bp.updated_at,
+        ))
+    return responses
+
+
+@router.patch(
+    "/billing-periods/{billing_period_id}",
+    response_model=BillingPeriodResponse,
+    summary="Editar o condonar un período de cobro",
+)
+async def update_billing_period(
+    billing_period_id: int,
+    data: BillingPeriodUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Edita due_date o notas de un BillingPeriod.
+    No permite modificar montos (son snapshot histórico).
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(BillingPeriod)
+        .join(Enrollment, Enrollment.id == BillingPeriod.enrollment_id)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            BillingPeriod.id == billing_period_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    bp = result.scalar_one_or_none()
+    if not bp:
+        raise HTTPException(status_code=404, detail="Período de cobro no encontrado.")
+
+    if data.due_date is not None:
+        bp.due_date = data.due_date
+    if data.notes is not None:
+        bp.notes = data.notes
+
+    await db.commit()
+    await db.refresh(bp)
+
+    paid_result = await db.execute(
+        select(func.coalesce(func.sum(Payment.amount), 0))
+        .where(Payment.billing_period_id == bp.id)
+    )
+    amount_paid = Decimal(str(paid_result.scalar_one()))
+
+    enrollment = bp.enrollment
+    student    = enrollment.student if enrollment else None
+    instrument = enrollment.instrument if enrollment else None
+
+    return BillingPeriodResponse(
+        id=bp.id,
+        enrollment_id=bp.enrollment_id,
+        student=StudentBrief(id=student.id if student else 0, name=student.name if student else "—"),
+        enrollment=EnrollmentBrief(
+            id=enrollment.id if enrollment else 0,
+            instrument_name=instrument.name if instrument else "—",
+            format=enrollment.format.value if enrollment else "—",
+        ),
+        period_year=bp.period_year,
+        period_month=bp.period_month,
+        base_amount=bp.base_amount,
+        discount_applied=bp.discount_applied,
+        final_amount=bp.final_amount,
+        amount_paid=amount_paid,
+        status=bp.status.value if hasattr(bp.status, 'value') else bp.status,
+        due_date=bp.due_date,
+        created_at=bp.created_at,
+        updated_at=bp.updated_at,
+    )
+
+
+@router.post(
+    "/billing-periods/{billing_period_id}/waive",
+    response_model=BillingPeriodResponse,
+    summary="Condonar un período de cobro",
+)
+async def waive_billing_period(
+    billing_period_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Marca un BillingPeriod como waived (condonado).
+    Solo aplica si está en pending o partial.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(BillingPeriod)
+        .join(Enrollment, Enrollment.id == BillingPeriod.enrollment_id)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            BillingPeriod.id == billing_period_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    bp = result.scalar_one_or_none()
+    if not bp:
+        raise HTTPException(status_code=404, detail="Período de cobro no encontrado.")
+    if bp.status == BillingPeriodStatus.PAID:
+        raise HTTPException(status_code=409, detail="No se puede condonar un período ya pagado.")
+    if bp.status == BillingPeriodStatus.WAIVED:
+        raise HTTPException(status_code=409, detail="Este período ya fue condonado.")
+
+    bp.status = BillingPeriodStatus.WAIVED
+    await db.commit()
+    await db.refresh(bp)
+
+    enrollment = bp.enrollment
+    student    = enrollment.student if enrollment else None
+    instrument = enrollment.instrument if enrollment else None
+
+    paid_result = await db.execute(
+        select(func.coalesce(func.sum(Payment.amount), 0))
+        .where(Payment.billing_period_id == bp.id)
+    )
+    amount_paid = Decimal(str(paid_result.scalar_one()))
+
+    return BillingPeriodResponse(
+        id=bp.id,
+        enrollment_id=bp.enrollment_id,
+        student=StudentBrief(id=student.id if student else 0, name=student.name if student else "—"),
+        enrollment=EnrollmentBrief(
+            id=enrollment.id if enrollment else 0,
+            instrument_name=instrument.name if instrument else "—",
+            format=enrollment.format.value if enrollment else "—",
+        ),
+        period_year=bp.period_year,
+        period_month=bp.period_month,
+        base_amount=bp.base_amount,
+        discount_applied=bp.discount_applied,
+        final_amount=bp.final_amount,
+        amount_paid=amount_paid,
+        status=bp.status.value if hasattr(bp.status, 'value') else bp.status,
+        due_date=bp.due_date,
+        created_at=bp.created_at,
+        updated_at=bp.updated_at,
+    )
+
+
+# ════════════════════════════════════════════════════════════════════
+# PAYMENTS
+# ════════════════════════════════════════════════════════════════════
+
+@router.post(
+    "/payments",
+    response_model=PaymentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Registrar un pago de alumno",
+)
+async def create_payment(
+    data: PaymentCreate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Registra un pago recibido de una familia.
+    Conceptos: cuota (vinculado a BillingPeriod), matricula, extra (montos libres).
+    Si concept=cuota y billing_period_id es None → error.
+    Si hay billing_period_id → recalcula el status del BillingPeriod automáticamente.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    enr_result = await db.execute(
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            Enrollment.id == data.enrollment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    enrollment = enr_result.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment no encontrado en tu organización.")
+
+    if data.concept == "cuota" and data.billing_period_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Para pagos de cuota es obligatorio especificar billing_period_id."
+        )
+
+    bp = None
+    if data.billing_period_id is not None:
+        bp_result = await db.execute(
+            select(BillingPeriod).where(
+                BillingPeriod.id == data.billing_period_id,
+                BillingPeriod.enrollment_id == data.enrollment_id,
+            )
+        )
+        bp = bp_result.scalar_one_or_none()
+        if not bp:
+            raise HTTPException(status_code=404, detail="Período de cobro no encontrado.")
+        if bp.status == BillingPeriodStatus.WAIVED:
+            raise HTTPException(status_code=409, detail="Este período fue condonado, no acepta pagos.")
+
+    payment = Payment(
+        enrollment_id=data.enrollment_id,
+        billing_period_id=data.billing_period_id,
+        amount=data.amount,
+        concept=PaymentConcept(data.concept),
+        payment_date=data.payment_date,
+        payment_method=PaymentMethod(data.payment_method),
+        notes=data.notes,
+    )
+    db.add(payment)
+    await db.flush()
+
+    if data.billing_period_id is not None:
+        await _recalculate_billing_status(db, data.billing_period_id)
+
+    await db.commit()
+    await db.refresh(payment)
+
+    student    = enrollment.student
+    instrument = enrollment.instrument
+
+    return PaymentResponse(
+        id=payment.id,
+        enrollment_id=payment.enrollment_id,
+        billing_period_id=payment.billing_period_id,
+        amount=payment.amount,
+        concept=payment.concept.value if hasattr(payment.concept, 'value') else payment.concept,
+        payment_date=payment.payment_date,
+        payment_method=payment.payment_method.value if hasattr(payment.payment_method, 'value') else payment.payment_method,
+        notes=payment.notes,
+        student_name=student.name if student else "—",
+        instrument_name=instrument.name if instrument else "—",
+        created_at=payment.created_at,
+        updated_at=payment.updated_at,
+    )
+
+
+@router.get(
+    "/payments",
+    response_model=list[PaymentResponse],
+    summary="Listar pagos de alumnos",
+)
+async def list_payments(
+    enrollment_id:     int | None = Query(None),
+    billing_period_id: int | None = Query(None),
+    concept:           str | None = Query(None),
+    from_date:         date | None = Query(None),
+    to_date:           date | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    if not current_teacher.organization_id:
+        return []
+
+    query = (
+        select(Payment)
+        .join(Enrollment, Enrollment.id == Payment.enrollment_id)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(Teacher.organization_id == current_teacher.organization_id)
+        .order_by(Payment.payment_date.desc())
+    )
+
+    if enrollment_id is not None:
+        query = query.where(Payment.enrollment_id == enrollment_id)
+    if billing_period_id is not None:
+        query = query.where(Payment.billing_period_id == billing_period_id)
+    if concept is not None:
+        query = query.where(Payment.concept == concept)
+    if from_date is not None:
+        query = query.where(Payment.payment_date >= from_date)
+    if to_date is not None:
+        query = query.where(Payment.payment_date <= to_date)
+
+    result = await db.execute(query)
+    payments = result.scalars().all()
+
+    responses = []
+    for p in payments:
+        enrollment = p.enrollment
+        student    = enrollment.student if enrollment else None
+        instrument = enrollment.instrument if enrollment else None
+        responses.append(PaymentResponse(
+            id=p.id,
+            enrollment_id=p.enrollment_id,
+            billing_period_id=p.billing_period_id,
+            amount=p.amount,
+            concept=p.concept.value if hasattr(p.concept, 'value') else p.concept,
+            payment_date=p.payment_date,
+            payment_method=p.payment_method.value if hasattr(p.payment_method, 'value') else p.payment_method,
+            notes=p.notes,
+            student_name=student.name if student else "—",
+            instrument_name=instrument.name if instrument else "—",
+            created_at=p.created_at,
+            updated_at=p.updated_at,
+        ))
+    return responses
+
+
+@router.delete(
+    "/payments/{payment_id}",
+    summary="Eliminar un pago de alumno",
+)
+async def delete_payment(
+    payment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Elimina un pago registrado por error.
+    Si el pago estaba vinculado a un BillingPeriod, recalcula su status automáticamente.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Payment)
+        .join(Enrollment, Enrollment.id == Payment.enrollment_id)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            Payment.id == payment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    payment = result.scalar_one_or_none()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Pago no encontrado.")
+
+    billing_period_id = payment.billing_period_id
+    await db.delete(payment)
+    await db.flush()
+
+    if billing_period_id is not None:
+        await _recalculate_billing_status(db, billing_period_id)
+
+    await db.commit()
+    return {"deleted": True, "payment_id": payment_id}
 
 
 # ── DASHBOARD ──

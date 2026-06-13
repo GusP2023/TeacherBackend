@@ -7,7 +7,7 @@ Almacena snapshot de montos al momento de generación para preservar histórico.
 
 from datetime import date
 from decimal import Decimal
-from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, UniqueConstraint, Numeric
+from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, UniqueConstraint, Numeric, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List, TYPE_CHECKING
 import enum
@@ -150,6 +150,12 @@ class BillingPeriod(Base, TimestampMixin):
         Date,
         nullable=False,
         comment="Fecha límite de pago (ej: día 5 del mes correspondiente)"
+    )
+
+    notes: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Notas del administrador sobre este período"
     )
 
     # ========================================

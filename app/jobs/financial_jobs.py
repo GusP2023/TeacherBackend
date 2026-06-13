@@ -74,7 +74,11 @@ def get_previous_month_range(today: date) -> tuple[date, date]:
 # JOB 1: GENERAR BILLING PERIODS
 # ============================================
 
-async def generate_billing_periods(db: AsyncSession, target_date: date = None) -> dict:
+async def generate_billing_periods(
+    db: AsyncSession,
+    target_date: date = None,
+    organization_id: int | None = None,
+) -> dict:
     """
     Job mensual: Genera BillingPeriod para todos los enrollments activos.
     
@@ -112,9 +116,14 @@ async def generate_billing_periods(db: AsyncSession, target_date: date = None) -
     logger.info(f"generate_billing_periods: procesando para {period_year}-{period_month:02d}")
     
     # Obtener enrollments activos
-    result = await db.execute(
-        select(Enrollment).where(Enrollment.status == EnrollmentStatus.ACTIVE)
-    )
+    enrollment_query = select(Enrollment).where(Enrollment.status == EnrollmentStatus.ACTIVE)
+    if organization_id is not None:
+        enrollment_query = (
+            enrollment_query
+            .join(Teacher, Teacher.id == Enrollment.teacher_id)
+            .where(Teacher.organization_id == organization_id)
+        )
+    result = await db.execute(enrollment_query)
     enrollments = result.scalars().all()
     
     stats = {
