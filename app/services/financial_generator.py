@@ -28,7 +28,7 @@ async def calculate_teacher_payment(
     amount_calculated = Decimal("0.00")
 
     if teacher.payment_mode in ["per_class", "mixed"]:
-        # Obtener clases completed del período con attendance present o absent
+        # Obtener clases del período con attendance present o absent
         classes_result = await db.execute(
             select(Class)
             .join(Attendance, Attendance.class_id == Class.id)
@@ -36,7 +36,6 @@ async def calculate_teacher_payment(
                 Class.teacher_id == teacher.id,
                 Class.date >= period_from,
                 Class.date <= period_to,
-                Class.status == ClassStatus.COMPLETED,
                 Attendance.status.in_([AttendanceStatus.PRESENT, AttendanceStatus.ABSENT])
             )
         )

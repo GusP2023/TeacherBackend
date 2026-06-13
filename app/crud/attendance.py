@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.attendance import Attendance, AttendanceStatus
 from app.models.enrollment import Enrollment
-from app.models.class_model import Class
+from app.models.class_model import Class, ClassStatus
 from app.schemas.attendance import AttendanceCreate, AttendanceUpdate
 
 
@@ -80,7 +80,10 @@ async def create(db: AsyncSession, attendance_data: AttendanceCreate) -> Attenda
     # Crear la asistencia
     attendance = Attendance(**attendance_data.model_dump())
     db.add(attendance)
-    
+
+    # Marcar la clase como completada
+    class_obj.status = ClassStatus.COMPLETED
+
     # Si es license o excused, otorgar crédito
     if attendance_data.status in (AttendanceStatus.LICENSE, AttendanceStatus.EXCUSED):
         result = await db.execute(
@@ -121,14 +124,15 @@ async def delete(db: AsyncSession, attendance_id: int) -> bool:
     
     if not attendance:
         return False
-    
+
+    # Obtener la clase para revertir su estado
+    result = await db.execute(
+        select(Class).where(Class.id == attendance.class_id)
+    )
+    class_obj = result.scalar_one_or_none()
+
     # Si era license o excused, quitar el crédito otorgado
     if attendance.status in (AttendanceStatus.LICENSE, AttendanceStatus.EXCUSED):
-        # Obtener el enrollment_id desde la clase
-        result = await db.execute(
-            select(Class).where(Class.id == attendance.class_id)
-        )
-        class_obj = result.scalar_one_or_none()
         
         if class_obj:
             result = await db.execute(
@@ -143,6 +147,7 @@ async def delete(db: AsyncSession, attendance_id: int) -> bool:
                     raise ValueError("No se puede eliminar asistencia 'license' porque el alumno ya usó los créditos")
     
     await db.delete(attendance)
+    class_obj.status = ClassStatus.SCHEDULED
     await db.commit()
     
     return True
