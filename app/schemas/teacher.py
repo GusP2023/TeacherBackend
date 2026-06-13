@@ -52,6 +52,7 @@ class TeacherUpdate(BaseModel):
     tariff_group: Decimal | None = Field(None, gt=0, decimal_places=2)
     payment_mode:    str | None = Field(None, pattern="^(per_class|monthly_fixed|mixed)$")
     monthly_salary:  Decimal | None = Field(None, gt=0, decimal_places=2)
+    is_instructor: bool | None = None
 
 
 class TeacherResponse(TeacherBase):
@@ -64,6 +65,7 @@ class TeacherResponse(TeacherBase):
     """
     id: int
     active: bool
+    is_instructor: bool = True
     created_at: datetime
     updated_at: datetime
     role: str = "org_admin"

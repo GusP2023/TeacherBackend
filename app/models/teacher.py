@@ -159,6 +159,11 @@ class Teacher(Base, TimestampMixin):
         comment="Indica si el profesor está activo"
     )
 
+    is_instructor: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true",
+        comment="True si el teacher tiene clases/horarios. False para roles administrativos."
+    )
+
     # ========================================
     # MULTI-TENANT: organización y rol
     # ========================================

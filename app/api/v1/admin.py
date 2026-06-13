@@ -163,7 +163,8 @@ async def list_org_students(
         return []
 
     query = select(Student).join(Teacher).where(
-        Teacher.organization_id == current_teacher.organization_id
+        Teacher.organization_id == current_teacher.organization_id,
+        Teacher.is_instructor == True,
     )
 
     if search:
@@ -470,6 +471,7 @@ async def get_dashboard(
         .where(
             Teacher.organization_id == org_id,
             Teacher.active == True,
+            Teacher.is_instructor == True,
         )
     )
     active_teachers = active_teachers_result.scalar_one() or 0
@@ -626,6 +628,7 @@ async def get_dashboard(
         .where(
             Teacher.organization_id == org_id,
             Teacher.active == True,
+            Teacher.is_instructor == True,
         )
         .order_by(Teacher.name)
     )
@@ -1314,6 +1317,7 @@ async def list_org_schedules(
         selectinload(Schedule.room),
     ).join(Teacher).where(
         Teacher.organization_id == current_teacher.organization_id,
+        Teacher.is_instructor == True,
         Schedule.active.is_(True),
     ).order_by(Teacher.name, Schedule.day, Schedule.time)
 
@@ -2392,7 +2396,8 @@ async def _get_teacher_for_org(db: AsyncSession, teacher_id: int, org_id: int) -
     result = await db.execute(
         select(Teacher).where(
             Teacher.id == teacher_id,
-            Teacher.organization_id == org_id
+            Teacher.organization_id == org_id,
+            Teacher.is_instructor == True,
         )
     )
     teacher = result.scalar_one_or_none()
@@ -2642,7 +2647,8 @@ async def list_availability(
         return []
 
     query = select(TeacherAvailability).join(Teacher).where(
-        Teacher.organization_id == current_teacher.organization_id
+        Teacher.organization_id == current_teacher.organization_id,
+        Teacher.is_instructor == True,
     )
 
     if teacher_id is not None:
