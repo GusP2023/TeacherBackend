@@ -1,5 +1,5 @@
 """Schemas Pydantic para PersonnelPayment"""
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -72,8 +72,8 @@ class PersonnelPaymentResponse(BaseModel):
     invoice_number:              str | None
     invoice_date:                date | None
     invoice_notes:               str | None
-    created_at:                  date
-    updated_at:                  date
+    created_at:                  datetime
+    updated_at:                  datetime
 
     model_config = ConfigDict(from_attributes=True)
 
