@@ -38,10 +38,13 @@ from app.models.schedule import DayOfWeek, Schedule
 from app.models.student import Student
 from app.models.teacher import Teacher, VALID_ROLES
 from app.models.teacher_availability import TeacherAvailability
-from app.models.enrollment import Enrollment, EnrollmentStatus
+from app.models.enrollment import Enrollment, EnrollmentStatus, EnrollmentLevel
 from app.models.billing_period import BillingPeriod, BillingPeriodStatus
 from app.models.payment import Payment, PaymentConcept, PaymentMethod
 from app.models.personnel_payment import PersonnelPayment, PersonnelPaymentStatus
+from app.models.fee_discount import FeeDiscount, DiscountType
+from app.models.expense import Expense, ExpenseCategory
+from app.models.organization import Organization
 from app.schemas.invitation import InvitationCreate, InvitationResponse
 from app.schemas.student import StudentResponse
 from app.schemas.teacher import TeacherResponse
@@ -3553,3 +3556,705 @@ async def personnel_payments_pending_alert(
         for t in all_teachers
         if t.id not in teachers_with_payment
     ]
+
+
+# ────────────────────────────────────────────────────
+# FEE DISCOUNTS (Descuentos de cuota por enrollment)
+# ────────────────────────────────────────────────────
+
+class FeeDiscountCreate(BaseModel):
+    discount_type: str = Field(..., pattern="^(percentage|fixed)$")
+    discount_value: Decimal = Field(..., gt=0)
+    valid_from_year: int
+    valid_from_month: int = Field(..., ge=1, le=12)
+    valid_until_year: int | None = None
+    valid_until_month: int | None = Field(None, ge=1, le=12)
+    reason: str | None = Field(None, max_length=255)
+    active: bool = True
+
+
+class FeeDiscountUpdate(BaseModel):
+    discount_type: str | None = Field(None, pattern="^(percentage|fixed)$")
+    discount_value: Decimal | None = Field(None, gt=0)
+    valid_from_year: int | None = None
+    valid_from_month: int | None = Field(None, ge=1, le=12)
+    valid_until_year: int | None = None
+    valid_until_month: int | None = Field(None, ge=1, le=12)
+    reason: str | None = None
+    active: bool | None = None
+
+
+class FeeDiscountResponse(BaseModel):
+    id: int
+    enrollment_id: int
+    discount_type: str
+    discount_value: Decimal
+    valid_from_year: int
+    valid_from_month: int
+    valid_until_year: int | None
+    valid_until_month: int | None
+    reason: str | None
+    active: bool
+    created_at: datetime_type
+    updated_at: datetime_type
+    model_config = ConfigDict(from_attributes=True)
+
+
+@router.post(
+    "/enrollments/{enrollment_id}/discounts",
+    response_model=FeeDiscountResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear descuento de cuota para un enrollment",
+)
+async def create_fee_discount(
+    enrollment_id: int,
+    data: FeeDiscountCreate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Crea un descuento de cuota (porcentaje o fijo) para un enrollment específico."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            Enrollment.id == enrollment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    enrollment = result.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment no encontrado en tu organización.")
+
+    discount = FeeDiscount(
+        enrollment_id=enrollment_id,
+        discount_type=DiscountType(data.discount_type),
+        discount_value=data.discount_value,
+        valid_from_year=data.valid_from_year,
+        valid_from_month=data.valid_from_month,
+        valid_until_year=data.valid_until_year,
+        valid_until_month=data.valid_until_month,
+        reason=data.reason,
+        active=data.active,
+    )
+    db.add(discount)
+    await db.commit()
+    await db.refresh(discount)
+    return discount
+
+
+@router.get(
+    "/enrollments/{enrollment_id}/discounts",
+    response_model=list[FeeDiscountResponse],
+    summary="Listar descuentos de un enrollment",
+)
+async def list_fee_discounts(
+    enrollment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Lista todos los descuentos de cuota de un enrollment, ordenados por fecha de vigencia."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            Enrollment.id == enrollment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    enrollment = result.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment no encontrado en tu organización.")
+
+    discounts_result = await db.execute(
+        select(FeeDiscount)
+        .where(FeeDiscount.enrollment_id == enrollment_id)
+        .order_by(FeeDiscount.valid_from_year.desc(), FeeDiscount.valid_from_month.desc())
+    )
+    discounts = discounts_result.scalars().all()
+    return discounts
+
+
+@router.patch(
+    "/fee-discounts/{discount_id}",
+    response_model=FeeDiscountResponse,
+    summary="Actualizar un descuento de cuota",
+)
+async def update_fee_discount(
+    discount_id: int,
+    data: FeeDiscountUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Actualiza campos de un descuento de cuota existente."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(FeeDiscount)
+        .join(Enrollment, Enrollment.id == FeeDiscount.enrollment_id)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            FeeDiscount.id == discount_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    discount = result.scalar_one_or_none()
+    if not discount:
+        raise HTTPException(status_code=404, detail="Descuento no encontrado en tu organización.")
+
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if field == "discount_type" and value is not None:
+            discount.discount_type = DiscountType(value)
+        else:
+            setattr(discount, field, value)
+
+    await db.commit()
+    await db.refresh(discount)
+    return discount
+
+
+@router.delete(
+    "/fee-discounts/{discount_id}",
+    summary="Eliminar un descuento de cuota",
+)
+async def delete_fee_discount(
+    discount_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Elimina un descuento de cuota."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(FeeDiscount)
+        .join(Enrollment, Enrollment.id == FeeDiscount.enrollment_id)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            FeeDiscount.id == discount_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    discount = result.scalar_one_or_none()
+    if not discount:
+        raise HTTPException(status_code=404, detail="Descuento no encontrado en tu organización.")
+
+    await db.delete(discount)
+    await db.commit()
+    return {"deleted": True, "discount_id": discount_id}
+
+
+# ────────────────────────────────────────────────────
+# EXPENSES (Gastos operativos)
+# ────────────────────────────────────────────────────
+
+class ExpenseCreate(BaseModel):
+    amount: Decimal = Field(..., gt=0)
+    category: str = Field(..., pattern="^(alquiler|servicios|materiales|marketing|mantenimiento|otro)$")
+    description: str = Field(..., min_length=1, max_length=500)
+    expense_date: datetime_date
+    recurring: bool = False
+    receipt_note: str | None = Field(None, max_length=255)
+
+
+class ExpenseUpdate(BaseModel):
+    amount: Decimal | None = Field(None, gt=0)
+    category: str | None = Field(None, pattern="^(alquiler|servicios|materiales|marketing|mantenimiento|otro)$")
+    description: str | None = Field(None, min_length=1, max_length=500)
+    expense_date: datetime_date | None = None
+    recurring: bool | None = None
+    receipt_note: str | None = None
+
+
+class ExpenseResponse(BaseModel):
+    id: int
+    organization_id: int
+    amount: Decimal
+    category: str
+    description: str
+    expense_date: datetime_date
+    recurring: bool
+    receipt_note: str | None
+    created_at: datetime_type
+    updated_at: datetime_type
+    model_config = ConfigDict(from_attributes=True)
+
+
+@router.post(
+    "/expenses",
+    response_model=ExpenseResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear un gasto operativo",
+)
+async def create_expense(
+    data: ExpenseCreate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Registra un gasto operativo de la organización."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    expense = Expense(
+        organization_id=current_teacher.organization_id,
+        amount=data.amount,
+        category=ExpenseCategory(data.category),
+        description=data.description,
+        expense_date=data.expense_date,
+        recurring=data.recurring,
+        receipt_note=data.receipt_note,
+    )
+    db.add(expense)
+    await db.commit()
+    await db.refresh(expense)
+    return expense
+
+
+@router.get(
+    "/expenses",
+    response_model=list[ExpenseResponse],
+    summary="Listar gastos operativos",
+)
+async def list_expenses(
+    category: str | None = Query(None),
+    from_date: datetime_date | None = Query(None),
+    to_date: datetime_date | None = Query(None),
+    recurring: bool | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Lista gastos operativos de la organización con filtros opcionales."""
+    if not current_teacher.organization_id:
+        return []
+
+    query = select(Expense).where(
+        Expense.organization_id == current_teacher.organization_id
+    ).order_by(Expense.expense_date.desc())
+
+    if category is not None:
+        query = query.where(Expense.category == ExpenseCategory(category))
+    if from_date is not None:
+        query = query.where(Expense.expense_date >= from_date)
+    if to_date is not None:
+        query = query.where(Expense.expense_date <= to_date)
+    if recurring is not None:
+        query = query.where(Expense.recurring == recurring)
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.patch(
+    "/expenses/{expense_id}",
+    response_model=ExpenseResponse,
+    summary="Actualizar un gasto operativo",
+)
+async def update_expense(
+    expense_id: int,
+    data: ExpenseUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Actualiza campos de un gasto operativo existente."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Expense).where(
+            Expense.id == expense_id,
+            Expense.organization_id == current_teacher.organization_id,
+        )
+    )
+    expense = result.scalar_one_or_none()
+    if not expense:
+        raise HTTPException(status_code=404, detail="Gasto no encontrado en tu organización.")
+
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if field == "category" and value is not None:
+            expense.category = ExpenseCategory(value)
+        else:
+            setattr(expense, field, value)
+
+    await db.commit()
+    await db.refresh(expense)
+    return expense
+
+
+@router.delete(
+    "/expenses/{expense_id}",
+    summary="Eliminar un gasto operativo",
+)
+async def delete_expense(
+    expense_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Elimina un gasto operativo."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Expense).where(
+            Expense.id == expense_id,
+            Expense.organization_id == current_teacher.organization_id,
+        )
+    )
+    expense = result.scalar_one_or_none()
+    if not expense:
+        raise HTTPException(status_code=404, detail="Gasto no encontrado en tu organización.")
+
+    await db.delete(expense)
+    await db.commit()
+    return {"deleted": True, "expense_id": expense_id}
+
+
+# ────────────────────────────────────────────────────
+# ENROLLMENT ADMIN (Gestión admin de inscripciones)
+# ────────────────────────────────────────────────────
+
+class AdminEnrollmentResponse(BaseModel):
+    id: int
+    student_id: int
+    student_name: str
+    instrument_id: int
+    instrument_name: str
+    teacher_id: int
+    teacher_name: str
+    status: str
+    level: str | None
+    format: str
+    enrolled_date: datetime_date
+    suspended_until: datetime_date | None
+    suspended_at: datetime_date | None
+    suspended_reason: str | None
+    withdrawn_date: datetime_date | None
+    credits: int
+    base_monthly_fee: Decimal
+    enrollment_fee: Decimal
+    created_at: datetime_type
+    updated_at: datetime_type
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminEnrollmentUpdate(BaseModel):
+    """Solo los campos que admin puede editar directamente."""
+    level: str | None = None
+    base_monthly_fee: Decimal | None = Field(None, ge=0)
+    enrollment_fee: Decimal | None = Field(None, ge=0)
+    credits: int | None = Field(None, ge=0)
+    notes: str | None = None
+
+
+class AdminEnrollmentSuspend(BaseModel):
+    suspended_until: datetime_date
+    suspended_reason: str | None = Field(None, max_length=255)
+
+
+class AdminEnrollmentWithdraw(BaseModel):
+    withdrawn_date: datetime_date
+
+
+def _build_admin_enrollment_response(enrollment, student, instrument, teacher) -> dict:
+    return {
+        "id": enrollment.id,
+        "student_id": enrollment.student_id,
+        "student_name": student.name if student else "—",
+        "instrument_id": enrollment.instrument_id,
+        "instrument_name": instrument.name if instrument else "—",
+        "teacher_id": enrollment.teacher_id,
+        "teacher_name": teacher.name if teacher else "—",
+        "status": enrollment.status.value if hasattr(enrollment.status, 'value') else enrollment.status,
+        "level": enrollment.level.value if enrollment.level and hasattr(enrollment.level, 'value') else enrollment.level,
+        "format": enrollment.format.value if hasattr(enrollment.format, 'value') else enrollment.format,
+        "enrolled_date": enrollment.enrolled_date,
+        "suspended_until": enrollment.suspended_until,
+        "suspended_at": enrollment.suspended_at,
+        "suspended_reason": enrollment.suspended_reason,
+        "withdrawn_date": enrollment.withdrawn_date,
+        "credits": enrollment.credits,
+        "base_monthly_fee": enrollment.base_monthly_fee,
+        "enrollment_fee": enrollment.enrollment_fee,
+        "created_at": enrollment.created_at,
+        "updated_at": enrollment.updated_at,
+    }
+
+
+@router.get(
+    "/enrollments",
+    response_model=list[AdminEnrollmentResponse],
+    summary="Listar inscripciones (admin)",
+)
+async def list_admin_enrollments(
+    student_id: int | None = Query(None),
+    teacher_id: int | None = Query(None),
+    status: str | None = Query(None, alias="status"),
+    instrument_id: int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Lista inscripciones de la organización con filtros opcionales."""
+    if not current_teacher.organization_id:
+        return []
+
+    query = (
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .options(
+            selectinload(Enrollment.student),
+            selectinload(Enrollment.instrument),
+            selectinload(Enrollment.teacher),
+        )
+        .where(Teacher.organization_id == current_teacher.organization_id)
+    )
+
+    if student_id is not None:
+        query = query.where(Enrollment.student_id == student_id)
+    if teacher_id is not None:
+        query = query.where(Enrollment.teacher_id == teacher_id)
+    if status is not None:
+        query = query.where(Enrollment.status == EnrollmentStatus(status))
+    if instrument_id is not None:
+        query = query.where(Enrollment.instrument_id == instrument_id)
+
+    query = query.order_by(Teacher.name, Student.name)
+    result = await db.execute(query)
+    enrollments = result.scalars().all()
+
+    return [
+        AdminEnrollmentResponse.model_validate(_build_admin_enrollment_response(
+            e, e.student, e.instrument, e.teacher
+        ))
+        for e in enrollments
+    ]
+
+
+@router.get(
+    "/enrollments/{enrollment_id}",
+    response_model=AdminEnrollmentResponse,
+    summary="Obtener inscripción (admin)",
+)
+async def get_admin_enrollment(
+    enrollment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Obtiene detalles de una inscripción específica."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .options(
+            selectinload(Enrollment.student),
+            selectinload(Enrollment.instrument),
+            selectinload(Enrollment.teacher),
+        )
+        .where(
+            Enrollment.id == enrollment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    enrollment = result.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment no encontrado en tu organización.")
+
+    return AdminEnrollmentResponse.model_validate(_build_admin_enrollment_response(
+        enrollment, enrollment.student, enrollment.instrument, enrollment.teacher
+    ))
+
+
+@router.patch(
+    "/enrollments/{enrollment_id}",
+    response_model=AdminEnrollmentResponse,
+    summary="Actualizar inscripción (admin)",
+)
+async def update_admin_enrollment(
+    enrollment_id: int,
+    data: AdminEnrollmentUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Actualiza campos editables de una inscripción (level, fees, credits)."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .options(
+            selectinload(Enrollment.student),
+            selectinload(Enrollment.instrument),
+            selectinload(Enrollment.teacher),
+        )
+        .where(
+            Enrollment.id == enrollment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    enrollment = result.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment no encontrado en tu organización.")
+
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if field == "level" and value is not None:
+            enrollment.level = EnrollmentLevel(value)
+        elif field != "notes":
+            setattr(enrollment, field, value)
+
+    await db.commit()
+    await db.refresh(enrollment)
+
+    return AdminEnrollmentResponse.model_validate(_build_admin_enrollment_response(
+        enrollment, enrollment.student, enrollment.instrument, enrollment.teacher
+    ))
+
+
+@router.post(
+    "/enrollments/{enrollment_id}/suspend",
+    response_model=AdminEnrollmentResponse,
+    summary="Suspender inscripción (admin)",
+)
+async def suspend_admin_enrollment(
+    enrollment_id: int,
+    data: AdminEnrollmentSuspend,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Suspende una inscripción activa. No elimina clases futuras."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .options(
+            selectinload(Enrollment.student),
+            selectinload(Enrollment.instrument),
+            selectinload(Enrollment.teacher),
+        )
+        .where(
+            Enrollment.id == enrollment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    enrollment = result.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment no encontrado en tu organización.")
+
+    if enrollment.status != EnrollmentStatus.ACTIVE:
+        raise HTTPException(status_code=409, detail="Solo se pueden suspender inscripciones activas.")
+
+    enrollment.status = EnrollmentStatus.SUSPENDED
+    enrollment.suspended_until = data.suspended_until
+    enrollment.suspended_at = date.today()
+    enrollment.suspended_reason = data.suspended_reason
+
+    await db.commit()
+    await db.refresh(enrollment)
+
+    return AdminEnrollmentResponse.model_validate(_build_admin_enrollment_response(
+        enrollment, enrollment.student, enrollment.instrument, enrollment.teacher
+    ))
+
+
+@router.post(
+    "/enrollments/{enrollment_id}/reactivate",
+    response_model=AdminEnrollmentResponse,
+    summary="Reactivar inscripción (admin)",
+)
+async def reactivate_admin_enrollment(
+    enrollment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Reactiva una inscripción suspendida. No regenera clases."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .options(
+            selectinload(Enrollment.student),
+            selectinload(Enrollment.instrument),
+            selectinload(Enrollment.teacher),
+        )
+        .where(
+            Enrollment.id == enrollment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    enrollment = result.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment no encontrado en tu organización.")
+
+    if enrollment.status != EnrollmentStatus.SUSPENDED:
+        raise HTTPException(status_code=409, detail="Solo se pueden reactivar inscripciones suspendidas.")
+
+    enrollment.status = EnrollmentStatus.ACTIVE
+    enrollment.suspended_until = None
+    enrollment.suspended_at = None
+    enrollment.suspended_reason = None
+
+    await db.commit()
+    await db.refresh(enrollment)
+
+    return AdminEnrollmentResponse.model_validate(_build_admin_enrollment_response(
+        enrollment, enrollment.student, enrollment.instrument, enrollment.teacher
+    ))
+
+
+@router.post(
+    "/enrollments/{enrollment_id}/withdraw",
+    response_model=AdminEnrollmentResponse,
+    summary="Retirar inscripción (admin)",
+)
+async def withdraw_admin_enrollment(
+    enrollment_id: int,
+    data: AdminEnrollmentWithdraw,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Retira una inscripción (cambia estado a withdrawn)."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .options(
+            selectinload(Enrollment.student),
+            selectinload(Enrollment.instrument),
+            selectinload(Enrollment.teacher),
+        )
+        .where(
+            Enrollment.id == enrollment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    enrollment = result.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment no encontrado en tu organización.")
+
+    if enrollment.status == EnrollmentStatus.WITHDRAWN:
+        raise HTTPException(status_code=409, detail="La inscripción ya está retirada.")
+
+    enrollment.status = EnrollmentStatus.WITHDRAWN
+    enrollment.withdrawn_date = data.withdrawn_date
+
+    await db.commit()
+    await db.refresh(enrollment)
+
+    return AdminEnrollmentResponse.model_validate(_build_admin_enrollment_response(
+        enrollment, enrollment.student, enrollment.instrument, enrollment.teacher
+    ))

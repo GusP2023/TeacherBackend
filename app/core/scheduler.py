@@ -316,20 +316,23 @@ def start_scheduler():
         replace_existing=True
     )
 
-    # Job mensual: día 1 de cada mes a las 00:30 AM - Generación de personnel payments
-    scheduler.add_job(
-        monthly_personnel_payments_job,
-        trigger=CronTrigger(day=1, hour=0, minute=30),
-        id='generate_personnel_payments',
-        name='Generación mensual de personnel payments',
-        replace_existing=True
-    )
+    # DESHABILITADO: La liquidación de personal ahora es manual (panel Finanzas).
+    # generate_personnel_payments() es obsoleta (usaba period_year/period_month,
+    # reemplazados por period_from/period_to). No eliminar por si se reactiva
+    # una versión adaptada en el futuro.
+    # scheduler.add_job(
+    #     monthly_personnel_payments_job,
+    #     trigger=CronTrigger(day=1, hour=0, minute=30),
+    #     id='generate_personnel_payments',
+    #     name='Generación mensual de personnel payments',
+    #     replace_existing=True
+    # )
 
     scheduler.start()
     print("[SCHEDULER] ✅ Iniciado - Jobs mensuales configurados:")
     print("  - Clases: día 6, 00:00 AM")
     print("  - Billing Periods: día 1, 00:00 AM")
-    print("  - Personnel Payments: día 1, 00:30 AM")
+    print("  - Personnel Payments: deshabilitado (flujo manual)")
 
 
 def shutdown_scheduler():
