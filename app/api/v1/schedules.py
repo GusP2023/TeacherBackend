@@ -527,6 +527,8 @@ async def remove_schedule_with_date(
     #         detail="El horario ya no está activo"
     #     )
     
+    teacher_id = schedule_obj.teacher_id
+
     # Ejecutar eliminación
     try:
         result = await remove_schedule_with_history(
@@ -534,7 +536,7 @@ async def remove_schedule_with_date(
             schedule_id=schedule_id,
             remove_from=data.remove_from
         )
-        await notify_data_change(schedule_obj.teacher_id, "schedule", "remove", result["schedule_id"])
+        await notify_data_change(teacher_id, "schedule", "remove", result["schedule_id"])
         
         return {
             "schedule_id": result["schedule_id"],
@@ -594,13 +596,15 @@ async def reactivate_schedule_endpoint(
         if schedule_obj.teacher_id != current_teacher.id:
             raise HTTPException(status_code=403, detail="No tienes permiso para modificar este horario")
 
+    teacher_id = schedule_obj.teacher_id
+
     try:
         result = await reactivate_schedule(
             db=db,
             schedule_id=schedule_id,
             valid_from=data.valid_from
         )
-        await notify_data_change(schedule_obj.teacher_id, "schedule", "reactivate", result["new_schedule_id"])
+        await notify_data_change(teacher_id, "schedule", "reactivate", result["new_schedule_id"])
 
         return ReactivateScheduleResponse(
             old_schedule_id=result["old_schedule_id"],
@@ -689,6 +693,8 @@ async def change_schedule_endpoint(
             detail="El horario ya no está activo"
         )
 
+    teacher_id = schedule_obj.teacher_id
+
     # Ejecutar cambio atómico
     try:
         result = await change_schedule(
@@ -700,7 +706,7 @@ async def change_schedule_endpoint(
         )
 
         # Notify teacher about schedule change (new schedule created)
-        await notify_data_change(schedule_obj.teacher_id, "schedule", "change", result["new_schedule_id"])
+        await notify_data_change(teacher_id, "schedule", "change", result["new_schedule_id"])
 
         return ChangeScheduleResponse(
             old_schedule_id=result["old_schedule_id"],

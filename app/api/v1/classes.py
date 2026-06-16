@@ -379,7 +379,7 @@ async def cancel_class(
     
     # Cancelar
     cancelled_class = await class_crud.cancel(db, class_id)
-    await notify_data_change(class_obj.teacher_id, "class", "cancel", cancelled_class.id)
+    await notify_data_change(cancelled_class.teacher_id, "class", "cancel", cancelled_class.id)
     
     return cancelled_class
 
@@ -433,6 +433,8 @@ async def delete_recovery_class(
                 detail="No tienes permiso para eliminar esta clase"
             )
     
+    teacher_id = class_obj.teacher_id
+
     # Eliminar (el CRUD valida que sea recovery y no tenga attendance)
     try:
         success = await class_crud.delete_recovery(db, class_id)
@@ -441,6 +443,6 @@ async def delete_recovery_class(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    await notify_data_change(class_obj.teacher_id, "class", "delete", class_id)
+    await notify_data_change(teacher_id, "class", "delete", class_id)
     
     return None  # 204 No Content

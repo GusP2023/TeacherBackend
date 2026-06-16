@@ -2871,12 +2871,14 @@ async def admin_delete_class_attendance(
         if enrollment:
             enrollment.credits = max(0, enrollment.credits - 1)
 
+    teacher_id = class_obj.teacher_id
+
     # Eliminar asistencia y regresar clase a scheduled
     await db.delete(class_obj.attendance)
     class_obj.status = ClassStatus.SCHEDULED
 
     await db.commit()
-    await notify_data_change(class_obj.teacher_id, "attendance", "delete", class_id)
+    await notify_data_change(teacher_id, "attendance", "delete", class_id)
     return {"deleted": True, "class_id": class_id}
 
 

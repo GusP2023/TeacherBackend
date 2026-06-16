@@ -439,6 +439,8 @@ async def delete_enrollment(
                 detail="No tienes permiso para eliminar esta inscripción"
             )
         
+    teacher_id = enrollment_obj.teacher_id
+
     success = await enrollment.remove(db, enrollment_id)
     
     if not success:
@@ -446,7 +448,7 @@ async def delete_enrollment(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error al eliminar la inscripción"
         )
-    await notify_data_change(enrollment_obj.teacher_id, "enrollment", "delete", enrollment_id)
+    await notify_data_change(teacher_id, "enrollment", "delete", enrollment_id)
     return None
 
 
@@ -549,7 +551,7 @@ async def suspend_enrollment_put(
             data.reason
         )
 
-        await notify_data_change(enrollment_obj.teacher_id, "enrollment", "suspend", result.id)
+        await notify_data_change(result.teacher_id, "enrollment", "suspend", result.id)
         return {
             "id": result.id,
             "status": result.status.value,
@@ -784,7 +786,7 @@ async def reactivate_enrollment_put(
 
         # ÉXITO - Enrollment fue reactivado
         reactivated_enrollment = result.get("enrollment")
-        await notify_data_change(enrollment_obj.teacher_id, "enrollment", "reactivate", reactivated_enrollment.id)
+        await notify_data_change(reactivated_enrollment.teacher_id, "enrollment", "reactivate", reactivated_enrollment.id)
         return {
             "id": reactivated_enrollment.id,
             "status": reactivated_enrollment.status.value,

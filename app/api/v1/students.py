@@ -312,7 +312,7 @@ async def update_student(
     
     # Actualizar
     updated_student = await student.update(db, student_id, student_data)
-    await notify_data_change(student_obj.teacher_id, "student", "update", updated_student.id)
+    await notify_data_change(updated_student.teacher_id, "student", "update", updated_student.id)
     
     return updated_student
 
@@ -368,6 +368,8 @@ async def delete_student(
                 detail="No tienes permiso para eliminar este alumno"
             )
     
+    teacher_id = student_obj.teacher_id
+
     # Hard-delete
     success = await student.remove(db, student_id)
     
@@ -378,5 +380,5 @@ async def delete_student(
             detail="Error al eliminar el alumno"
         )
     
-    await notify_data_change(student_obj.teacher_id, "student", "delete", student_id)
+    await notify_data_change(teacher_id, "student", "delete", student_id)
     return None  # 204 No Content

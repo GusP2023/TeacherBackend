@@ -247,6 +247,8 @@ async def delete_attendance(
                 detail="No tienes permiso para eliminar esta asistencia"
             )
     
+    teacher_id = attendance_obj.class_.teacher_id
+
     # Eliminar
     try:
         await attendance.delete(db, attendance_id)
@@ -255,7 +257,7 @@ async def delete_attendance(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    await notify_data_change(attendance_obj.class_.teacher_id, "attendance", "delete", attendance_id)
+    await notify_data_change(teacher_id, "attendance", "delete", attendance_id)
     
     return None  # 204 No Content
 
@@ -320,6 +322,8 @@ async def update_attendance(
                 detail="No tienes permiso para actualizar esta asistencia"
             )
     
+    teacher_id = attendance_obj.class_.teacher_id
+
     # Actualizar (el CRUD maneja lógica de créditos automáticamente)
     try:
         updated_attendance = await attendance.update(db, attendance_id, attendance_data)
@@ -328,6 +332,6 @@ async def update_attendance(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    await notify_data_change(attendance_obj.class_.teacher_id, "attendance", "update", updated_attendance.id)
+    await notify_data_change(teacher_id, "attendance", "update", updated_attendance.id)
     
     return updated_attendance
