@@ -20,7 +20,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func, update, and_
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 from app.core.database import get_db
@@ -32,7 +32,7 @@ from app.core.permissions import (
 from app.models.attendance import Attendance, AttendanceStatus
 from app.models.branch import Branch
 from app.models.class_model import Class, ClassFormat, ClassType, ClassStatus
-from app.models.event import Event, EVENT_TYPES
+from app.models.event import Event, EVENT_TYPES, event_teachers, event_students
 from app.models.room import Room
 from app.models.schedule import DayOfWeek, Schedule
 from app.models.student import Student
@@ -4260,3 +4260,194 @@ async def withdraw_admin_enrollment(
     return AdminEnrollmentResponse.model_validate(_build_admin_enrollment_response(
         enrollment, enrollment.student, enrollment.instrument, enrollment.teacher
     ))
+
+
+class AgendaClassItem(BaseModel):
+    """Clase individual con contexto completo para la agenda."""
+    id: int
+    date: datetime_date
+    time: str
+    duration: int
+    type: str
+    format: str
+    status: str
+    notes: str | None
+    student_id: int | None
+    student_name: str | None
+    teacher_id: int
+    teacher_name: str
+    instrument_id: int | None
+    instrument_name: str | None
+    room_id: int | None
+    room_name: str | None
+    attendance_status: str | None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AgendaEventTeacher(BaseModel):
+    id: int
+    name: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AgendaEventItem(BaseModel):
+    """Evento institucional con contexto para la agenda."""
+    id: int
+    title: str
+    date: datetime_date
+    time_start: str
+    duration: int
+    event_type: str
+    room_id: int | None
+    room_name: str | None
+    description: str | None
+    guest_name: str | None
+    notes: str | None
+    teachers: list[AgendaEventTeacher]
+    student_count: int
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AgendaResponse(BaseModel):
+    """Respuesta completa del endpoint de agenda."""
+    from_date: datetime_date
+    to_date: datetime_date
+    classes: list[AgendaClassItem]
+    events: list[AgendaEventItem]
+
+
+@router.get(
+    "/agenda",
+    response_model=AgendaResponse,
+    summary="Obtener datos de agenda (clases y eventos)",
+)
+async def get_admin_agenda(
+    from_date: datetime_date = Query(..., description="Fecha inicial del rango"),
+    to_date: datetime_date = Query(..., description="Fecha final del rango"),
+    teacher_id: int | None = Query(None, description="Filtrar por teacher_id"),
+    room_id: int | None = Query(None, description="Filtrar por room_id"),
+    instrument_id: int | None = Query(None, description="Filtrar por instrument_id"),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.view_data")),
+):
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Sin organización asociada.")
+
+    if to_date < from_date:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="to_date debe ser mayor o igual a from_date.",
+        )
+
+    if (to_date - from_date).days > 60:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El rango máximo es 60 días.",
+        )
+
+    classes_stmt = (
+        select(
+            Class,
+            Student.id.label("student_id"),
+            Student.name.label("student_name"),
+            Teacher.name.label("teacher_name"),
+            Instrument.id.label("instrument_id"),
+            Instrument.name.label("instrument_name"),
+            Room.name.label("room_name"),
+            Attendance.status.label("attendance_status"),
+        )
+        .join(Teacher, Teacher.id == Class.teacher_id)
+        .join(Enrollment, Enrollment.id == Class.enrollment_id, isouter=True)
+        .join(Student, Student.id == Enrollment.student_id, isouter=True)
+        .join(Instrument, Instrument.id == Enrollment.instrument_id, isouter=True)
+        .join(Room, Room.id == Class.room_id, isouter=True)
+        .join(Attendance, Attendance.class_id == Class.id, isouter=True)
+        .where(
+            Teacher.organization_id == current_teacher.organization_id,
+            Class.date >= from_date,
+            Class.date <= to_date,
+            Class.status != ClassStatus.CANCELLED,
+        )
+    )
+
+    if teacher_id is not None:
+        classes_stmt = classes_stmt.where(Class.teacher_id == teacher_id)
+    if room_id is not None:
+        classes_stmt = classes_stmt.where(Class.room_id == room_id)
+    if instrument_id is not None:
+        classes_stmt = classes_stmt.where(Enrollment.instrument_id == instrument_id)
+
+    classes_stmt = classes_stmt.order_by(Class.date, Class.time)
+    class_rows = (await db.execute(classes_stmt)).all()
+
+    classes: list[AgendaClassItem] = []
+    for row in class_rows:
+        cls = row[0]
+        classes.append(AgendaClassItem(
+            id=cls.id,
+            date=cls.date,
+            time=cls.time.strftime("%H:%M"),
+            duration=cls.duration,
+            type=cls.type.value if hasattr(cls.type, 'value') else cls.type,
+            format=cls.format.value if hasattr(cls.format, 'value') else cls.format,
+            status=cls.status.value if hasattr(cls.status, 'value') else cls.status,
+            notes=cls.notes,
+            student_id=row.student_id,
+            student_name=row.student_name,
+            teacher_id=cls.teacher_id,
+            teacher_name=row.teacher_name,
+            instrument_id=row.instrument_id,
+            instrument_name=row.instrument_name,
+            room_id=cls.room_id,
+            room_name=row.room_name,
+            attendance_status=(
+                row.attendance_status.value
+                if row.attendance_status and hasattr(row.attendance_status, 'value')
+                else row.attendance_status
+            ),
+        ))
+
+    events_stmt = (
+        select(Event)
+        .where(
+            Event.organization_id == current_teacher.organization_id,
+            Event.date >= from_date,
+            Event.date <= to_date,
+        )
+        .options(
+            selectinload(Event.teachers),
+            selectinload(Event.students),
+            selectinload(Event.room),
+        )
+        .order_by(Event.date, Event.time_start)
+    )
+
+    if room_id is not None:
+        events_stmt = events_stmt.where(Event.room_id == room_id)
+
+    event_rows = (await db.execute(events_stmt)).scalars().all()
+
+    events: list[AgendaEventItem] = []
+    for ev in event_rows:
+        events.append(AgendaEventItem(
+            id=ev.id,
+            title=ev.title,
+            date=ev.date,
+            time_start=ev.time_start.strftime("%H:%M"),
+            duration=ev.duration,
+            event_type=ev.event_type,
+            room_id=ev.room_id,
+            room_name=ev.room.name if ev.room else None,
+            description=ev.description,
+            guest_name=ev.guest_name,
+            notes=ev.notes,
+            teachers=[AgendaEventTeacher(id=t.id, name=t.name) for t in ev.teachers],
+            student_count=len(ev.students or []),
+        ))
+
+    return AgendaResponse(
+        from_date=from_date,
+        to_date=to_date,
+        classes=classes,
+        events=events,
+    )
