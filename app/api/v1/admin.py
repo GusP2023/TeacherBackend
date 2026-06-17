@@ -4328,7 +4328,7 @@ async def get_admin_agenda(
     room_id: int | None = Query(None, description="Filtrar por room_id"),
     instrument_id: int | None = Query(None, description="Filtrar por instrument_id"),
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.view_data")),
+    current_teacher: Teacher = Depends(require_permission("students.view_enrollment")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Sin organización asociada.")
