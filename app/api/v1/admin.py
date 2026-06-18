@@ -1973,7 +1973,20 @@ async def update_schedule_room(
                 detail += "."
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
+    room_changed = schedule.room_id != data.room_id
     schedule.room_id = data.room_id
+
+    if room_changed:
+        await db.execute(
+            update(Class)
+            .where(
+                Class.schedule_id == schedule.id,
+                Class.date >= datetime_date.today(),
+                Class.status == ClassStatus.SCHEDULED,
+            )
+            .values(room_id=data.room_id)
+        )
+
     await db.commit()
     await db.refresh(schedule)
 

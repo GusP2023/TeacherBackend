@@ -102,5 +102,7 @@ class StudentHistoryItem(BaseModel):
     duration: int | None = None
     status: str | None = None
     notes: str | None = None
+    room_id: int | None = None
+    room_name: str | None = None
 
     model_config = ConfigDict(from_attributes=True)

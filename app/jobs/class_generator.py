@@ -256,7 +256,8 @@ async def _generate_classes_for_schedule(
             'duration': schedule.duration,
             'status': ClassStatus.SCHEDULED,
             'type': ClassType.REGULAR,
-            'format': enrollment.format
+            'format': enrollment.format,
+            'room_id': schedule.room_id,
         })
 
         # Avanzar una semana

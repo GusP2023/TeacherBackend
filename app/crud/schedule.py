@@ -5,7 +5,7 @@ CRUD operations for Schedule model
 import logging
 from datetime import date, time
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, and_, or_, func, extract
+from sqlalchemy import select, delete, update, and_, or_, func, extract
 from sqlalchemy.orm import selectinload
 from app.models.schedule import Schedule, DayOfWeek
 from app.models.attendance import Attendance
@@ -389,8 +389,21 @@ async def update(
                 f"(Inscripción ID: {conflict.enrollment_id})"
             )
 
+    room_changed = 'room_id' in update_data and update_data.get('room_id') != schedule_obj.room_id
+
     for field, value in update_data.items():
         setattr(schedule_obj, field, value)
+
+    if room_changed:
+        await db.execute(
+            update(Class)
+            .where(
+                Class.schedule_id == schedule_id,
+                Class.date >= date.today(),
+                Class.status == ClassStatus.SCHEDULED,
+            )
+            .values(room_id=update_data.get('room_id'))
+        )
 
     await db.commit()
     await db.refresh(schedule_obj)

@@ -242,6 +242,8 @@ async def get_student_history(
                 duration=class_obj.duration,
                 status=status_value,
                 notes=notes_value,
+                room_id=class_obj.room_id,
+                room_name=class_obj.room.name if class_obj.room else None,
             )
         )
 
