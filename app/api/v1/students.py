@@ -159,6 +159,7 @@ async def get_student(
 async def get_student_history(
     student_id: int,
     limit: int = Query(30, ge=1, le=100, description="Cantidad máxima de clases a retornar"),
+    skip: int = Query(0, ge=0, description="Cantidad de registros a omitir"),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
@@ -202,6 +203,7 @@ async def get_student_history(
         )
         .where(Enrollment.student_id == student_id)
         .order_by(Class.date.desc(), Class.time.desc())
+        .offset(skip)
         .limit(limit)
     )
 

@@ -4293,6 +4293,9 @@ class AgendaClassItem(BaseModel):
     instrument_name: str | None
     room_id: int | None
     room_name: str | None
+    branch_id: int | None
+    branch_name: str | None
+    schedule_id: int | None
     attendance_status: str | None
     model_config = ConfigDict(from_attributes=True)
 
@@ -4340,6 +4343,7 @@ async def get_admin_agenda(
     teacher_id: int | None = Query(None, description="Filtrar por teacher_id"),
     room_id: int | None = Query(None, description="Filtrar por room_id"),
     instrument_id: int | None = Query(None, description="Filtrar por instrument_id"),
+    branch_id: int | None = Query(None, description="Filtrar por branch_id de la sala"),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(require_permission("students.view_enrollment")),
 ):
@@ -4367,6 +4371,8 @@ async def get_admin_agenda(
             Instrument.id.label("instrument_id"),
             Instrument.name.label("instrument_name"),
             Room.name.label("room_name"),
+            Branch.id.label("branch_id"),
+            Branch.name.label("branch_name"),
             Attendance.status.label("attendance_status"),
         )
         .join(Teacher, Teacher.id == Class.teacher_id)
@@ -4374,6 +4380,7 @@ async def get_admin_agenda(
         .join(Student, Student.id == Enrollment.student_id, isouter=True)
         .join(Instrument, Instrument.id == Enrollment.instrument_id, isouter=True)
         .join(Room, Room.id == Class.room_id, isouter=True)
+        .join(Branch, Branch.id == Room.branch_id, isouter=True)
         .join(Attendance, Attendance.class_id == Class.id, isouter=True)
         .where(
             Teacher.organization_id == current_teacher.organization_id,
@@ -4389,6 +4396,10 @@ async def get_admin_agenda(
         classes_stmt = classes_stmt.where(Class.room_id == room_id)
     if instrument_id is not None:
         classes_stmt = classes_stmt.where(Enrollment.instrument_id == instrument_id)
+    if branch_id is not None:
+        classes_stmt = classes_stmt.where(
+            or_(Class.room_id.is_(None), Room.branch_id == branch_id)
+        )
 
     classes_stmt = classes_stmt.order_by(Class.date, Class.time)
     class_rows = (await db.execute(classes_stmt)).all()
@@ -4413,6 +4424,9 @@ async def get_admin_agenda(
             instrument_name=row.instrument_name,
             room_id=cls.room_id,
             room_name=row.room_name,
+            branch_id=row.branch_id,
+            branch_name=row.branch_name,
+            schedule_id=cls.schedule_id,
             attendance_status=(
                 row.attendance_status.value
                 if row.attendance_status and hasattr(row.attendance_status, 'value')
