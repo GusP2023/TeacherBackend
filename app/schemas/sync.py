@@ -140,6 +140,7 @@ class DeltaSyncResponse(BaseModel):
     students: List[StudentResponse] = []
     attendances: List[AttendanceResponse] = []
     valid_class_ids: List[int] = []  # IDs de todas las clases reales del profesor (para purgar eliminadas)
+    valid_attendance_ids: List[int] = [] # IDs de todas las asistencias reales del profesor
     sync_timestamp: str
 
 

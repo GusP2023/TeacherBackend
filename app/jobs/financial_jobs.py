@@ -162,22 +162,14 @@ async def generate_billing_periods(
                         FeeDiscount.enrollment_id == enrollment.id,
                         FeeDiscount.active == True,
                         # Vigencia desde
-                        and_(
-                            FeeDiscount.valid_from_year < period_year,
-                            FeeDiscount.valid_from_month < period_month
-                        ).self_group() |
+                        and_(FeeDiscount.valid_from_year < period_year).self_group() |
                         and_(
                             FeeDiscount.valid_from_year == period_year,
                             FeeDiscount.valid_from_month <= period_month
                         ).self_group(),
                         # Vigencia hasta (NULL = indefinido)
-                        and_(
-                            FeeDiscount.valid_until_year.is_(None)
-                        ).self_group() |
-                        and_(
-                            FeeDiscount.valid_until_year > period_year,
-                            FeeDiscount.valid_until_month > period_month
-                        ).self_group() |
+                        and_(FeeDiscount.valid_until_year.is_(None)).self_group() |
+                        and_(FeeDiscount.valid_until_year > period_year).self_group() |
                         and_(
                             FeeDiscount.valid_until_year == period_year,
                             FeeDiscount.valid_until_month >= period_month

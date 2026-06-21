@@ -290,6 +290,17 @@ async def sync_delta(
     )
     valid_class_ids = [row[0] for row in valid_ids_result.all()]
 
+    valid_att_result = await db.execute(
+        select(Attendance.id).join(Class, Attendance.class_id == Class.id).where(
+            and_(
+                Class.teacher_id == current_teacher.id,
+                Class.date >= range_start,
+                Class.date <= range_end,
+            )
+        )
+    )
+    valid_attendance_ids = [row[0] for row in valid_att_result.all()]
+
     return {
         "schedules": {
             "active": active_schedules,
@@ -300,6 +311,7 @@ async def sync_delta(
         "students": students,
         "attendances": attendances,
         "valid_class_ids": valid_class_ids,
+        "valid_attendance_ids": valid_attendance_ids,
         "sync_timestamp": datetime.now().isoformat()
     }
 
