@@ -272,6 +272,24 @@ async def sync_delta(
     )
     attendances = attendances_result.scalars().all()
 
+    # 7. IDs de todas las clases vigentes del profesor (para que el móvil
+    #    pueda detectar y purgar clases que fueron eliminadas en el backend).
+    #    Solo seleccionamos la columna id → query muy liviana.
+    today = datetime.now(timezone.utc).date()
+    range_start = date(today.year, 1, 1)
+    range_end   = date(today.year + 1, 3, 31)
+
+    valid_ids_result = await db.execute(
+        select(Class.id).where(
+            and_(
+                Class.teacher_id == current_teacher.id,
+                Class.date >= range_start,
+                Class.date <= range_end,
+            )
+        )
+    )
+    valid_class_ids = [row[0] for row in valid_ids_result.all()]
+
     return {
         "schedules": {
             "active": active_schedules,
@@ -281,6 +299,7 @@ async def sync_delta(
         "classes": classes,
         "students": students,
         "attendances": attendances,
+        "valid_class_ids": valid_class_ids,
         "sync_timestamp": datetime.now().isoformat()
     }
 
