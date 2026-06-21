@@ -63,13 +63,9 @@ class ConnectionManager:
 
         logger.info(f"[WebSocket] DESCONECTADO — Profesor ID: {teacher_id}")
 
-    async def send_to_teacher(self, teacher_id: int, message: dict):
+    async def send_to_teacher_local(self, teacher_id: int, message: dict):
         """
-        Enviar mensaje a todas las conexiones de un profesor
-
-        Args:
-            teacher_id: ID del profesor
-            message: Diccionario con el mensaje a enviar
+        Enviar mensaje a todas las conexiones locales de este worker para un profesor
         """
         if teacher_id not in active_connections:
             return
@@ -92,6 +88,53 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+
+# ==============================================================================
+# MULTI-WORKER SYNC CON POSTGRESQL LISTEN/NOTIFY
+# ==============================================================================
+from app.core.database import engine
+
+async def pg_notify_listener():
+    """
+    Escucha notificaciones de PostgreSQL en segundo plano y las reenvía a
+    las conexiones locales de este worker.
+    """
+    logger.info("[WebSocket] PG Listener: Iniciando tarea de sincronización multi-worker...")
+    await asyncio.sleep(5)  # Esperar a que la app inicie
+    
+    while True:
+        try:
+            async with engine.connect() as conn:
+                raw_conn = await conn.get_raw_connection()
+                # El objeto de conexión real de asyncpg
+                pg_conn = raw_conn.driver_connection
+                
+                def notification_callback(connection, pid, channel, payload):
+                    try:
+                        data = json.loads(payload)
+                        teacher_id = data.get("teacher_id")
+                        msg = data.get("message")
+                        if teacher_id and msg:
+                            # Ejecutar envío asíncronamente
+                            asyncio.create_task(manager.send_to_teacher_local(teacher_id, msg))
+                    except Exception as ex:
+                        logger.error(f"[WebSocket] PG Listener: Error decodificando payload: {ex}")
+                
+                await pg_conn.add_listener("ws_notifications", notification_callback)
+                logger.info("[WebSocket] PG Listener: Escuchando canal 'ws_notifications' de PostgreSQL...")
+                
+                # Mantener la conexión abierta
+                while True:
+                    await asyncio.sleep(3600)
+                    
+        except Exception as e:
+            logger.error(f"[WebSocket] PG Listener: Error de conexión (reintentando en 5s): {e}")
+            await asyncio.sleep(5)
+
+
+# Arrancar el listener en segundo plano al importar este módulo
+asyncio.create_task(pg_notify_listener())
 
 
 @router.websocket("/ws")
@@ -172,16 +215,7 @@ async def notify_data_change(
     entity_id: int | None = None,
 ):
     """
-    Notificar a un profesor que sus datos cambiaron
-
-    Args:
-        teacher_id: ID del profesor a notificar
-        entity: Tipo de entidad (student, enrollment, schedule, etc)
-        operation: Operación realizada (create, update, delete)
-        entity_id: ID de la entidad afectada (opcional)
-
-    Ejemplo:
-        await notify_data_change(1, "student", "create", 123)
+    Notificar a un profesor que sus datos cambiaron (vía PostgreSQL LISTEN/NOTIFY para multi-worker)
     """
     message = {
         "type": "data_changed",
@@ -191,5 +225,22 @@ async def notify_data_change(
         "timestamp": datetime.utcnow().isoformat()
     }
 
-    await manager.send_to_teacher(teacher_id, message)
-    logger.info(f"[WebSocket] Notificado profesor {teacher_id}: {entity} {operation} id={entity_id}")
+    payload = json.dumps({
+        "teacher_id": teacher_id,
+        "message": message
+    })
+
+    try:
+        from sqlalchemy import text
+        async with async_session_maker() as session:
+            # pg_notify es asíncrono y ultra liviano
+            await session.execute(
+                text("SELECT pg_notify('ws_notifications', :payload)"),
+                {"payload": payload}
+            )
+            await session.commit()
+        logger.info(f"[WebSocket] Notificación publicada en PG (Profesor {teacher_id}): {entity} {operation} id={entity_id}")
+    except Exception as e:
+        logger.error(f"[WebSocket] Error publicando notificación en PG (fallando a local): {e}")
+        # Fallback local
+        await manager.send_to_teacher_local(teacher_id, message)
