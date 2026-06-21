@@ -69,6 +69,7 @@ from app.models import (
     Schedule,
     Class,
     Attendance,
+    TeacherAvailability,
     # Enums
     EnrollmentStatus,
     EnrollmentLevel,

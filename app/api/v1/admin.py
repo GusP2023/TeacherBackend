@@ -19,7 +19,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func, update, and_
+from sqlalchemy import select, or_, func, update, and_, case
 from sqlalchemy.orm import selectinload, joinedload
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
@@ -2987,7 +2987,7 @@ async def list_teacher_availability(
         .where(TeacherAvailability.teacher_id == teacher_id)
         .order_by(
             # Ordenar por día de la semana (lunes→domingo)
-            func.case(
+            case(
                 *( (TeacherAvailability.day == day, i) for i, day in enumerate(
                     ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
                 ) ),
