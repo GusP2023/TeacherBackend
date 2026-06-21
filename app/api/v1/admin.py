@@ -4297,6 +4297,7 @@ class AgendaClassItem(BaseModel):
     branch_name: str | None
     schedule_id: int | None
     attendance_status: str | None
+    group_class_ids: list[int] | None = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -4405,33 +4406,76 @@ async def get_admin_agenda(
     class_rows = (await db.execute(classes_stmt)).all()
 
     classes: list[AgendaClassItem] = []
+    grouped_groups = {}
+
     for row in class_rows:
         cls = row[0]
+        cls_format = cls.format.value if hasattr(cls.format, 'value') else cls.format
+        
+        if cls_format == 'group':
+            key = (cls.date, cls.time, cls.room_id, cls.teacher_id)
+            if key not in grouped_groups:
+                grouped_groups[key] = {
+                    "base_row": row,
+                    "class_ids": [],
+                    "count": 0
+                }
+            grouped_groups[key]["class_ids"].append(cls.id)
+            grouped_groups[key]["count"] += 1
+        else:
+            classes.append(AgendaClassItem(
+                id=cls.id,
+                date=cls.date,
+                time=cls.time.strftime("%H:%M"),
+                duration=cls.duration,
+                type=cls.type.value if hasattr(cls.type, 'value') else cls.type,
+                format=cls_format,
+                status=cls.status.value if hasattr(cls.status, 'value') else cls.status,
+                notes=cls.notes,
+                student_id=row.student_id,
+                student_name=row.student_name,
+                teacher_id=cls.teacher_id,
+                teacher_name=row.teacher_name,
+                instrument_id=row.instrument_id,
+                instrument_name=row.instrument_name,
+                room_id=cls.room_id,
+                room_name=row.room_name,
+                branch_id=row.branch_id,
+                branch_name=row.branch_name,
+                schedule_id=cls.schedule_id,
+                attendance_status=(
+                    row.attendance_status.value
+                    if row.attendance_status and hasattr(row.attendance_status, 'value')
+                    else row.attendance_status
+                ),
+            ))
+
+    for key, data in grouped_groups.items():
+        row = data["base_row"]
+        cls = row[0]
+        count = data["count"]
         classes.append(AgendaClassItem(
-            id=cls.id,
+            id=data["class_ids"][0],
             date=cls.date,
             time=cls.time.strftime("%H:%M"),
             duration=cls.duration,
             type=cls.type.value if hasattr(cls.type, 'value') else cls.type,
-            format=cls.format.value if hasattr(cls.format, 'value') else cls.format,
+            format='group',
             status=cls.status.value if hasattr(cls.status, 'value') else cls.status,
             notes=cls.notes,
-            student_id=row.student_id,
-            student_name=row.student_name,
+            student_id=None,
+            student_name=f"Clase Grupal ({count} alumnos)",
             teacher_id=cls.teacher_id,
             teacher_name=row.teacher_name,
-            instrument_id=row.instrument_id,
-            instrument_name=row.instrument_name,
+            instrument_id=None,
+            instrument_name=None,
             room_id=cls.room_id,
             room_name=row.room_name,
             branch_id=row.branch_id,
             branch_name=row.branch_name,
             schedule_id=cls.schedule_id,
-            attendance_status=(
-                row.attendance_status.value
-                if row.attendance_status and hasattr(row.attendance_status, 'value')
-                else row.attendance_status
-            ),
+            attendance_status=None,
+            group_class_ids=data["class_ids"]
         ))
 
     events_stmt = (
