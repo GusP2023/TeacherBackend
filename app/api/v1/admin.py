@@ -2795,7 +2795,7 @@ async def admin_update_class_attendance(
 
     class_obj = await _get_class_for_org(db, class_id, current_teacher.organization_id)
 
-    _LICENSE = {AttendanceStatus.LICENSE, AttendanceStatus.EXCUSED}
+    _LICENSE = {AttendanceStatus.LICENSE}
 
     # Obtener enrollment para ajuste de créditos
     enrollment = None
@@ -2873,7 +2873,7 @@ async def admin_delete_class_attendance(
             detail="Esta clase no tiene asistencia registrada.",
         )
 
-    _LICENSE = {AttendanceStatus.LICENSE, AttendanceStatus.EXCUSED}
+    _LICENSE = {AttendanceStatus.LICENSE}
 
     # Revertir crédito si corresponde
     if class_obj.attendance.status in _LICENSE and class_obj.enrollment_id:
