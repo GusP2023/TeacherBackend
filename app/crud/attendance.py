@@ -50,7 +50,7 @@ async def create(db: AsyncSession, attendance_data: AttendanceCreate) -> Attenda
     """
     Crear/marcar asistencia para una clase
     
-    Si el status es 'license' o 'excused', otorga +1 crédito al enrollment automáticamente
+    Si el status es 'license', otorga +1 crédito al enrollment automáticamente
     
     Args:
         db: Sesión de base de datos
@@ -84,8 +84,8 @@ async def create(db: AsyncSession, attendance_data: AttendanceCreate) -> Attenda
     # Marcar la clase como completada
     class_obj.status = ClassStatus.COMPLETED
 
-    # Si es license o excused, otorgar crédito
-    if attendance_data.status in (AttendanceStatus.LICENSE, AttendanceStatus.EXCUSED):
+    # Si es license, otorgar crédito
+    if attendance_data.status == AttendanceStatus.LICENSE:
         result = await db.execute(
             select(Enrollment).where(Enrollment.id == class_obj.enrollment_id)
         )
@@ -104,7 +104,7 @@ async def delete(db: AsyncSession, attendance_id: int) -> bool:
     """
     Eliminar una asistencia
     
-    IMPORTANTE: Si la asistencia era 'license' o 'excused', quita -1 crédito del enrollment
+    IMPORTANTE: Si la asistencia era 'license', quita -1 crédito del enrollment
     
     Args:
         db: Sesión de base de datos
@@ -114,7 +114,7 @@ async def delete(db: AsyncSession, attendance_id: int) -> bool:
         True si se eliminó, False si no existía
     
     Raises:
-        ValueError: Si era license/excused y el alumno ya usó los créditos
+        ValueError: Si era license y el alumno ya usó los créditos
     """
     # Obtener la asistencia con su clase
     result = await db.execute(
@@ -131,8 +131,8 @@ async def delete(db: AsyncSession, attendance_id: int) -> bool:
     )
     class_obj = result.scalar_one_or_none()
 
-    # Si era license o excused, quitar el crédito otorgado
-    if attendance.status in (AttendanceStatus.LICENSE, AttendanceStatus.EXCUSED):
+    # Si era license, quitar el crédito otorgado
+    if attendance.status == AttendanceStatus.LICENSE:
         
         if class_obj:
             result = await db.execute(
@@ -161,9 +161,9 @@ async def update(
     """
     Actualizar una asistencia existente
     
-    IMPORTANTE: Si cambia de/a 'license'/'excused', ajusta créditos automáticamente:
-    - present/absent → license/excused: +1 crédito
-    - license/excused → present/absent: -1 crédito
+    IMPORTANTE: Si cambia de/a 'license', ajusta créditos automáticamente:
+    - present/absent → license: +1 crédito
+    - license → present/absent: -1 crédito
     
     Args:
         db: Sesión de base de datos
@@ -185,15 +185,12 @@ async def update(
     # Actualizar solo campos que no sean None
     update_data = attendance_data.model_dump(exclude_unset=True)
     
-    # Status que otorgan créditos
-    credit_statuses = (AttendanceStatus.LICENSE, AttendanceStatus.EXCUSED)
-    
     # Manejar cambios de status que afectan créditos
     if 'status' in update_data:
         old_status = attendance.status
         new_status = update_data['status']
         
-        # Si cambia el status relacionado con license/excused
+        # Si cambia el status relacionado con license
         if old_status != new_status:
             # Obtener el enrollment_id desde la clase
             result = await db.execute(
@@ -208,12 +205,12 @@ async def update(
                 enrollment = result.scalar_one_or_none()
                 
                 if enrollment:
-                    # Caso 1: Cambia A license/excused (otorgar crédito)
-                    if old_status not in credit_statuses and new_status in credit_statuses:
+                    # Caso 1: Cambia A license (otorgar crédito)
+                    if old_status != AttendanceStatus.LICENSE and new_status == AttendanceStatus.LICENSE:
                         enrollment.credits += 1
                     
-                    # Caso 2: Cambia DESDE license/excused (quitar crédito)
-                    elif old_status in credit_statuses and new_status not in credit_statuses:
+                    # Caso 2: Cambia DESDE license (quitar crédito)
+                    elif old_status == AttendanceStatus.LICENSE and new_status != AttendanceStatus.LICENSE:
                         if enrollment.credits > 0:
                             enrollment.credits -= 1
                         else:

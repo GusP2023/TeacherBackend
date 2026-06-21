@@ -21,7 +21,7 @@ IMPORTANTE:
 - Sin Attendance = clase no marcada = NO se cobra
 """
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 # Importar enum desde los modelos
 from app.models.attendance import AttendanceStatus
@@ -66,7 +66,13 @@ class AttendanceCreate(AttendanceBase):
         "notes": "Avisó con 2 días de anticipación - enfermedad"
     }
     """
-    pass  # No hay campos adicionales, hereda todo de Base
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def normalize_excused(cls, v):
+        if v == 'excused':
+            return 'license'
+        return v
 
 
 class AttendanceUpdate(BaseModel):
@@ -87,6 +93,13 @@ class AttendanceUpdate(BaseModel):
     """
     status: AttendanceStatus | None = None
     notes: str | None = None
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def normalize_excused(cls, v):
+        if v == 'excused':
+            return 'license'
+        return v
 
 
 class AttendanceResponse(AttendanceBase):

@@ -40,12 +40,10 @@ class AttendanceStatus(str, enum.Enum):
     - PRESENT: Asistió a la clase → SE COBRA
     - ABSENT: Faltó sin justificación → SE COBRA
     - LICENSE: Licencia justificada → NO SE COBRA, +1 CRÉDITO
-    - EXCUSED: Sinónimo de license (compatibilidad con frontend)
     """
     PRESENT = "present"
     ABSENT = "absent"
     LICENSE = "license"
-    EXCUSED = "excused"  # Alias para license
 
 
 class Attendance(Base, TimestampMixin):
