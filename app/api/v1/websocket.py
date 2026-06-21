@@ -99,13 +99,34 @@ async def pg_notify_listener():
     """
     Escucha notificaciones de PostgreSQL en segundo plano y las reenvía a
     las conexiones locales de este worker.
+    
+    NOTA CRÍTICA: Como el backend usa el pooler de Neon (PgBouncer en modo transacción),
+    LISTEN no funciona a través del pooler. Para solucionarlo, creamos una conexión
+    directa a la base de datos (removiendo '-pooler' de la URL) solo para el listener.
     """
     logger.info("[WebSocket] PG Listener: Iniciando tarea de sincronización multi-worker...")
     await asyncio.sleep(5)  # Esperar a que la app inicie
     
+    from app.core.config import settings
+    from sqlalchemy.ext.asyncio import create_async_engine
+    
+    # Construir URL de conexión directa sin pooler
+    direct_url = settings.DATABASE_URL
+    if "-pooler" in direct_url:
+        direct_url = direct_url.replace("-pooler", "", 1)
+        logger.info("[WebSocket] PG Listener: Usando conexión directa bypass-pooler para LISTEN...")
+    
+    # Crear engine dedicado de solo 1 conexión persistente para el listener
+    listener_engine = create_async_engine(
+        direct_url,
+        pool_pre_ping=True,
+        pool_size=1,
+        max_overflow=0
+    )
+    
     while True:
         try:
-            async with engine.connect() as conn:
+            async with listener_engine.connect() as conn:
                 raw_conn = await conn.get_raw_connection()
                 # El objeto de conexión real de asyncpg
                 pg_conn = raw_conn.driver_connection
@@ -122,7 +143,7 @@ async def pg_notify_listener():
                         logger.error(f"[WebSocket] PG Listener: Error decodificando payload: {ex}")
                 
                 await pg_conn.add_listener("ws_notifications", notification_callback)
-                logger.info("[WebSocket] PG Listener: Escuchando canal 'ws_notifications' de PostgreSQL...")
+                logger.info("[WebSocket] PG Listener: Escuchando canal 'ws_notifications' de PostgreSQL (Conexión Directa)...")
                 
                 # Mantener la conexión abierta
                 while True:
