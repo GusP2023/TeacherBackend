@@ -132,10 +132,11 @@ async def pg_notify_listener():
             logger.error(f"[WebSocket] PG Listener: Error de conexión (reintentando en 5s): {e}")
             await asyncio.sleep(5)
 
-
-# Arrancar el listener en segundo plano al importar este módulo
-asyncio.create_task(pg_notify_listener())
-
+def start_websocket_listener():
+    """
+    Arranca el listener en segundo plano cuando el event loop ya está activo.
+    """
+    asyncio.create_task(pg_notify_listener())
 
 @router.websocket("/ws")
 async def websocket_endpoint(

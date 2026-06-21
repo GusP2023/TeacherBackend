@@ -239,6 +239,14 @@ async def startup_event():
     # Iniciar scheduler de jobs automáticos
     start_scheduler()
 
+    # Iniciar listener de websockets multi-worker (PostgreSQL LISTEN)
+    try:
+        from app.api.v1.websocket import start_websocket_listener
+        start_websocket_listener()
+        print(">> Listener de Websockets multi-worker iniciado")
+    except Exception as e:
+        print(f">> Error iniciando listener de Websockets multi-worker: {e}")
+
     # Verificar si el job mensual se perdió por reinicio del servidor
     await check_and_run_missed_job()
 
