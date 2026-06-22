@@ -78,6 +78,14 @@ async def list_enrollments(
         skip=skip,
         limit=limit
     )
+    for e in enrollments:
+        if not hasattr(e, 'teacher_name') or e.teacher_name is None:
+            t = await db.get(Teacher, e.teacher_id)
+            e.teacher_name = t.name if t else None
+        if not hasattr(e, 'instrument_name') or e.instrument_name is None:
+            i = await instrument.get(db, e.instrument_id)
+            e.instrument_name = i.name if i else None
+
     return enrollments
 
 
@@ -182,11 +190,14 @@ async def get_student_enrollments(
     
     enrollments = await enrollment.get_by_student(db, student_id)
 
-    # Enriquecer con teacher_name
+    # Enriquecer con teacher_name e instrument_name
     for e in enrollments:
         if not hasattr(e, 'teacher_name') or e.teacher_name is None:
             t = await db.get(Teacher, e.teacher_id)
             e.teacher_name = t.name if t else None
+        if not hasattr(e, 'instrument_name') or e.instrument_name is None:
+            i = await instrument.get(db, e.instrument_id)
+            e.instrument_name = i.name if i else None
 
     return enrollments
 
@@ -219,6 +230,13 @@ async def get_enrollment(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="No tienes permiso para ver esta inscripción"
             )
+    
+    if not hasattr(enrollment_obj, 'teacher_name') or enrollment_obj.teacher_name is None:
+        t = await db.get(Teacher, enrollment_obj.teacher_id)
+        enrollment_obj.teacher_name = t.name if t else None
+    if not hasattr(enrollment_obj, 'instrument_name') or enrollment_obj.instrument_name is None:
+        i = await instrument.get(db, enrollment_obj.instrument_id)
+        enrollment_obj.instrument_name = i.name if i else None
     
     return enrollment_obj
 
