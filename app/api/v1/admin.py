@@ -734,6 +734,49 @@ async def waive_billing_period(
     )
 
 
+@router.delete(
+    "/billing-periods/{billing_period_id}",
+    summary="Eliminar un período de cobro",
+)
+async def delete_billing_period(
+    billing_period_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Elimina un BillingPeriod y todos sus pagos asociados (cascade).
+    No hay restricción por status — se puede eliminar en cualquier estado.
+    Usar cuando la cuota fue generada por error.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(BillingPeriod)
+        .options(selectinload(BillingPeriod.payments))
+        .join(Enrollment, Enrollment.id == BillingPeriod.enrollment_id)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            BillingPeriod.id == billing_period_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    bp = result.scalar_one_or_none()
+    if not bp:
+        raise HTTPException(status_code=404, detail="Período de cobro no encontrado.")
+
+    payments_deleted = len(bp.payments)
+
+    await db.delete(bp)
+    await db.commit()
+
+    return {
+        "deleted": True,
+        "billing_period_id": billing_period_id,
+        "payments_deleted": payments_deleted
+    }
+
+
 # ════════════════════════════════════════════════════════════════════
 # PAYMENTS
 # ════════════════════════════════════════════════════════════════════
