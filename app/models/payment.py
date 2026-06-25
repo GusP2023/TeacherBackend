@@ -30,11 +30,13 @@ class PaymentConcept(str, enum.Enum):
     - MATRICULA: Pago de matrícula de inscripción
     - EXTRA: Cobro extra (evento, material, examen, etc.)
     - RECUPERACION: Pago de clase de recuperación fuera del plan
+    - CLASE_SUELTA: Pago de clase suelta
     """
     CUOTA = "cuota"
     MATRICULA = "matricula"
     EXTRA = "extra"
     RECUPERACION = "recuperacion"
+    CLASE_SUELTA = "clase_suelta"
 
 
 class PaymentMethod(str, enum.Enum):
@@ -174,6 +176,12 @@ class Payment(Base, TimestampMixin):
         Text,
         nullable=True,
         comment="Notas adicionales sobre el pago"
+    )
+
+    reference: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Referencia bancaria o número de recibo (opcional)"
     )
 
     # ========================================

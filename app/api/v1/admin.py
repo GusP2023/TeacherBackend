@@ -50,9 +50,10 @@ from app.schemas.student import StudentResponse
 from app.schemas.teacher import TeacherResponse
 from app.schemas.teacher import TeacherUpdate
 from app.schemas.billing import (
-    BillingPeriodResponse, BillingPeriodUpdate, GenerateBillingPeriodsResponse,
-    PaymentCreate, PaymentResponse,
+    BillingPeriodResponse, BillingPeriodUpdate, BillingPeriodCreate,
+    GenerateBillingPeriodsResponse, StudentBillingSummary,
     StudentBrief, EnrollmentBrief,
+    PaymentCreate, PaymentResponse,
 )
 from app.schemas.personnel_payment import (
     PersonnelPaymentPreviewRequest, PersonnelPaymentPreviewResponse,
@@ -431,6 +432,42 @@ async def _recalculate_billing_status(db: AsyncSession, billing_period_id: int) 
         bp.status = BillingPeriodStatus.PAID
 
 
+def _build_bp_response(bp: BillingPeriod, amount_paid: Decimal,
+                        teacher_name: str = "—") -> BillingPeriodResponse:
+    """Construye BillingPeriodResponse a partir de un BillingPeriod cargado."""
+    enrollment = bp.enrollment
+    student    = enrollment.student if enrollment else None
+    instrument = enrollment.instrument if enrollment else None
+    return BillingPeriodResponse(
+        id=bp.id,
+        enrollment_id=bp.enrollment_id,
+        student=StudentBrief(
+            id=student.id if student else 0,
+            name=student.name if student else "—",
+        ),
+        enrollment=EnrollmentBrief(
+            id=enrollment.id if enrollment else 0,
+            instrument_name=instrument.name if instrument else "—",
+            format=enrollment.format.value if enrollment else "—",
+            teacher_name=teacher_name,
+        ),
+        charge_type=bp.charge_type,
+        description=bp.description,
+        quantity=bp.quantity,
+        period_year=bp.period_year,
+        period_month=bp.period_month,
+        base_amount=bp.base_amount,
+        discount_applied=bp.discount_applied,
+        final_amount=bp.final_amount,
+        amount_paid=amount_paid,
+        status=bp.status.value if hasattr(bp.status, 'value') else bp.status,
+        due_date=bp.due_date,
+        notes=bp.notes,
+        created_at=bp.created_at,
+        updated_at=bp.updated_at,
+    )
+
+
 # ════════════════════════════════════════════════════════════════════
 # REVERT PERSONNEL PAYMENT
 # ════════════════════════════════════════════════════════════════════
@@ -480,6 +517,124 @@ async def revert_personnel_payment(
 # BILLING PERIODS
 # ════════════════════════════════════════════════════════════════════
 
+@router.get(
+    "/billing-summary",
+    response_model=list[StudentBillingSummary],
+    summary="Resumen de cobros agrupado por alumno",
+)
+async def get_billing_summary(
+    teacher_id: int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Devuelve un resumen por alumno activo: saldo total pendiente,
+    si tiene cobros vencidos, y cantidad de cobros pendientes.
+    Ordenado: vencidos → pendientes → al día, luego alfabético.
+    """
+    if not current_teacher.organization_id:
+        return []
+
+    # 1. Enrollments activos de la org
+    enr_query = (
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            Teacher.organization_id == current_teacher.organization_id,
+            Enrollment.status == "active",
+        )
+        .options(
+            selectinload(Enrollment.student),
+            selectinload(Enrollment.teacher),
+        )
+    )
+    if teacher_id is not None:
+        enr_query = enr_query.where(Enrollment.teacher_id == teacher_id)
+
+    enr_result = await db.execute(enr_query)
+    enrollments = enr_result.scalars().all()
+    if not enrollments:
+        return []
+
+    enr_ids = [e.id for e in enrollments]
+
+    # 2. Mapa estudiante → info
+    student_map: dict[int, dict] = {}
+    for e in enrollments:
+        sid = e.student_id
+        if sid not in student_map:
+            student_map[sid] = {
+                "name": e.student.name if e.student else "—",
+                "teacher_name": e.teacher.name if e.teacher else "—",
+                "enrollment_ids": [],
+            }
+        student_map[sid]["enrollment_ids"].append(e.id)
+
+    # 3. BillingPeriods pendientes / parciales
+    bp_result = await db.execute(
+        select(BillingPeriod)
+        .where(
+            BillingPeriod.enrollment_id.in_(enr_ids),
+            BillingPeriod.status.in_(["pending", "partial"]),
+        )
+    )
+    pending_bps = bp_result.scalars().all()
+
+    # 4. Mapa de pagos
+    paid_map: dict[int, Decimal] = {}
+    bp_ids = [bp.id for bp in pending_bps]
+    if bp_ids:
+        paid_rows = await db.execute(
+            select(Payment.billing_period_id, func.sum(Payment.amount))
+            .where(Payment.billing_period_id.in_(bp_ids))
+            .group_by(Payment.billing_period_id)
+        )
+        paid_map = {row[0]: Decimal(str(row[1])) for row in paid_rows.all()}
+
+    # 5. Agrupar BPs por student_id
+    enr_to_student = {e.id: e.student_id for e in enrollments}
+    today = date.today()
+    student_bps: dict[int, list[dict]] = {sid: [] for sid in student_map}
+    for bp in pending_bps:
+        sid = enr_to_student.get(bp.enrollment_id)
+        if sid:
+            amount_paid = paid_map.get(bp.id, Decimal("0"))
+            student_bps[sid].append({
+                "saldo": bp.final_amount - amount_paid,
+                "due_date": bp.due_date,
+            })
+
+    # 6. Construir resumen
+    summaries = []
+    for sid, info in student_map.items():
+        bps = student_bps.get(sid, [])
+        total_pending = sum(b["saldo"] for b in bps)
+        has_overdue = any(
+            b["due_date"] and b["due_date"] < today for b in bps
+        )
+        if has_overdue:
+            billing_status = "overdue"
+        elif total_pending > 0:
+            billing_status = "pending"
+        else:
+            billing_status = "current"
+
+        summaries.append(StudentBillingSummary(
+            student_id=sid,
+            student_name=info["name"],
+            teacher_name=info["teacher_name"],
+            enrollment_count=len(info["enrollment_ids"]),
+            total_pending=total_pending,
+            pending_count=len(bps),
+            has_overdue=has_overdue,
+            billing_status=billing_status,
+        ))
+
+    order = {"overdue": 0, "pending": 1, "current": 2}
+    summaries.sort(key=lambda s: (order[s.billing_status], s.student_name.lower()))
+    return summaries
+
+
 @router.post(
     "/billing-periods/generate",
     response_model=GenerateBillingPeriodsResponse,
@@ -524,6 +679,7 @@ async def list_billing_periods(
     status_filter: str | None = Query(None, alias="status"),
     student_id:   int | None = Query(None),
     teacher_id:   int | None = Query(None),
+    charge_type:  str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
@@ -536,6 +692,9 @@ async def list_billing_periods(
         .join(Teacher, Teacher.id == Enrollment.teacher_id)
         .where(Teacher.organization_id == current_teacher.organization_id)
         .order_by(BillingPeriod.period_year.desc(), BillingPeriod.period_month.desc())
+        .options(
+            selectinload(BillingPeriod.enrollment).selectinload(Enrollment.teacher)
+        )
     )
 
     if year is not None:
@@ -548,6 +707,8 @@ async def list_billing_periods(
         query = query.where(Enrollment.student_id == student_id)
     if teacher_id is not None:
         query = query.where(Enrollment.teacher_id == teacher_id)
+    if charge_type is not None:
+        query = query.where(BillingPeriod.charge_type == charge_type)
 
     result = await db.execute(query)
     billing_periods = result.scalars().all()
@@ -565,32 +726,102 @@ async def list_billing_periods(
     responses = []
     for bp in billing_periods:
         enrollment = bp.enrollment
-        student = enrollment.student if enrollment else None
+        student    = enrollment.student if enrollment else None
         instrument = enrollment.instrument if enrollment else None
-        responses.append(BillingPeriodResponse(
-            id=bp.id,
-            enrollment_id=bp.enrollment_id,
-            student=StudentBrief(
-                id=student.id if student else 0,
-                name=student.name if student else "—",
-            ),
-            enrollment=EnrollmentBrief(
-                id=enrollment.id if enrollment else 0,
-                instrument_name=instrument.name if instrument else "—",
-                format=enrollment.format.value if enrollment else "—",
-            ),
-            period_year=bp.period_year,
-            period_month=bp.period_month,
-            base_amount=bp.base_amount,
-            discount_applied=bp.discount_applied,
-            final_amount=bp.final_amount,
-            amount_paid=paid_map.get(bp.id, Decimal("0.00")),
-            status=bp.status.value if hasattr(bp.status, 'value') else bp.status,
-            due_date=bp.due_date,
-            created_at=bp.created_at,
-            updated_at=bp.updated_at,
+        teacher_name = (
+            enrollment.teacher.name
+            if enrollment and enrollment.teacher
+            else "—"
+        )
+        responses.append(_build_bp_response(
+            bp,
+            paid_map.get(bp.id, Decimal("0.00")),
+            teacher_name,
         ))
     return responses
+
+
+@router.post(
+    "/billing-periods",
+    response_model=BillingPeriodResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear un cobro manual (matrícula, extra, clase suelta, cuota adelantada)",
+)
+async def create_billing_period(
+    data: BillingPeriodCreate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    # Verificar ownership del enrollment
+    enr_result = await db.execute(
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            Enrollment.id == data.enrollment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+        .options(selectinload(Enrollment.student), selectinload(Enrollment.teacher))
+    )
+    enrollment = enr_result.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment no encontrado.")
+
+    # Validaciones por charge_type
+    if data.charge_type == "cuota":
+        if not data.period_year or not data.period_month:
+            raise HTTPException(
+                status_code=400,
+                detail="Para cuotas es obligatorio especificar period_year y period_month."
+            )
+
+    if data.charge_type == "matricula":
+        # Solo una matrícula por enrollment
+        existing = await db.execute(
+            select(BillingPeriod).where(
+                BillingPeriod.enrollment_id == data.enrollment_id,
+                BillingPeriod.charge_type == "matricula",
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail="Ya existe un cobro de matrícula para esta inscripción."
+            )
+
+    if data.charge_type == "clase_suelta" and not data.quantity:
+        raise HTTPException(
+            status_code=400,
+            detail="Para clases sueltas es obligatorio especificar la cantidad de créditos."
+        )
+
+    # Calcular final_amount
+    final_amount = data.base_amount - data.discount_applied
+    if final_amount < 0:
+        raise HTTPException(status_code=400, detail="El descuento no puede superar el monto base.")
+
+    bp = BillingPeriod(
+        enrollment_id=data.enrollment_id,
+        charge_type=data.charge_type,
+        description=data.description,
+        quantity=data.quantity,
+        period_year=data.period_year,
+        period_month=data.period_month,
+        base_amount=data.base_amount,
+        discount_applied=data.discount_applied,
+        final_amount=final_amount,
+        status=BillingPeriodStatus.PENDING,
+        due_date=data.due_date or date.today(),
+        notes=data.notes,
+    )
+    db.add(bp)
+    await db.commit()
+    await db.refresh(bp)
+
+    teacher_name = enrollment.teacher.name if enrollment.teacher else "—"
+    return _build_bp_response(bp, Decimal("0.00"), teacher_name)
 
 
 @router.patch(
@@ -628,6 +859,21 @@ async def update_billing_period(
         bp.due_date = data.due_date
     if data.notes is not None:
         bp.notes = data.notes
+    if data.description is not None:
+        bp.description = data.description
+    if data.quantity is not None:
+        bp.quantity = data.quantity
+    if data.base_amount is not None:
+        bp.base_amount = data.base_amount
+    if data.discount_applied is not None:
+        bp.discount_applied = data.discount_applied
+    if data.base_amount is not None or data.discount_applied is not None:
+        bp.final_amount = bp.base_amount - bp.discount_applied
+        if bp.final_amount < 0:
+            raise HTTPException(
+                status_code=400,
+                detail="El descuento no puede superar el monto base."
+            )
 
     await db.commit()
     await db.refresh(bp)
@@ -638,30 +884,12 @@ async def update_billing_period(
     )
     amount_paid = Decimal(str(paid_result.scalar_one()))
 
-    enrollment = bp.enrollment
-    student    = enrollment.student if enrollment else None
-    instrument = enrollment.instrument if enrollment else None
-
-    return BillingPeriodResponse(
-        id=bp.id,
-        enrollment_id=bp.enrollment_id,
-        student=StudentBrief(id=student.id if student else 0, name=student.name if student else "—"),
-        enrollment=EnrollmentBrief(
-            id=enrollment.id if enrollment else 0,
-            instrument_name=instrument.name if instrument else "—",
-            format=enrollment.format.value if enrollment else "—",
-        ),
-        period_year=bp.period_year,
-        period_month=bp.period_month,
-        base_amount=bp.base_amount,
-        discount_applied=bp.discount_applied,
-        final_amount=bp.final_amount,
-        amount_paid=amount_paid,
-        status=bp.status.value if hasattr(bp.status, 'value') else bp.status,
-        due_date=bp.due_date,
-        created_at=bp.created_at,
-        updated_at=bp.updated_at,
+    teacher_name = (
+        bp.enrollment.teacher.name
+        if bp.enrollment and bp.enrollment.teacher
+        else "—"
     )
+    return _build_bp_response(bp, amount_paid, teacher_name)
 
 
 @router.post(
@@ -712,26 +940,12 @@ async def waive_billing_period(
     )
     amount_paid = Decimal(str(paid_result.scalar_one()))
 
-    return BillingPeriodResponse(
-        id=bp.id,
-        enrollment_id=bp.enrollment_id,
-        student=StudentBrief(id=student.id if student else 0, name=student.name if student else "—"),
-        enrollment=EnrollmentBrief(
-            id=enrollment.id if enrollment else 0,
-            instrument_name=instrument.name if instrument else "—",
-            format=enrollment.format.value if enrollment else "—",
-        ),
-        period_year=bp.period_year,
-        period_month=bp.period_month,
-        base_amount=bp.base_amount,
-        discount_applied=bp.discount_applied,
-        final_amount=bp.final_amount,
-        amount_paid=amount_paid,
-        status=bp.status.value if hasattr(bp.status, 'value') else bp.status,
-        due_date=bp.due_date,
-        created_at=bp.created_at,
-        updated_at=bp.updated_at,
+    teacher_name = (
+        bp.enrollment.teacher.name
+        if bp.enrollment and bp.enrollment.teacher
+        else "—"
     )
+    return _build_bp_response(bp, amount_paid, teacher_name)
 
 
 @router.delete(
@@ -818,6 +1032,11 @@ async def create_payment(
             status_code=400,
             detail="Para pagos de cuota es obligatorio especificar billing_period_id."
         )
+    if data.concept == "clase_suelta" and data.billing_period_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Para clases sueltas es obligatorio especificar billing_period_id."
+        )
 
     bp = None
     if data.billing_period_id is not None:
@@ -841,12 +1060,20 @@ async def create_payment(
         payment_date=data.payment_date,
         payment_method=PaymentMethod(data.payment_method),
         notes=data.notes,
+        reference=data.reference,
     )
     db.add(payment)
     await db.flush()
 
     if data.billing_period_id is not None:
         await _recalculate_billing_status(db, data.billing_period_id)
+
+    # Otorgar créditos si clase_suelta queda completamente pagada
+    if bp and bp.charge_type == "clase_suelta":
+        await db.flush()
+        await db.refresh(bp)
+        if bp.status == BillingPeriodStatus.PAID:
+            enrollment.credits += (bp.quantity or 1)
 
     await db.commit()
     await db.refresh(payment)
@@ -863,6 +1090,7 @@ async def create_payment(
         payment_date=payment.payment_date,
         payment_method=payment.payment_method.value if hasattr(payment.payment_method, 'value') else payment.payment_method,
         notes=payment.notes,
+        reference=payment.reference,
         student_name=student.name if student else "—",
         instrument_name=instrument.name if instrument else "—",
         created_at=payment.created_at,
@@ -961,11 +1189,36 @@ async def delete_payment(
         raise HTTPException(status_code=404, detail="Pago no encontrado.")
 
     billing_period_id = payment.billing_period_id
+
+    # Capturar si era clase_suelta pagada (para revertir créditos)
+    was_paid_clase_suelta = False
+    credits_to_revoke = 0
+    bp_for_credit = None
+    enr_for_credit = None
+
+    if billing_period_id:
+        bp_check = await db.execute(
+            select(BillingPeriod).where(BillingPeriod.id == billing_period_id)
+        )
+        bp_for_credit = bp_check.scalar_one_or_none()
+        if (bp_for_credit
+                and bp_for_credit.charge_type == "clase_suelta"
+                and bp_for_credit.status == BillingPeriodStatus.PAID):
+            was_paid_clase_suelta = True
+            credits_to_revoke = bp_for_credit.quantity or 1
+            enr_check = await db.execute(
+                select(Enrollment).where(Enrollment.id == payment.enrollment_id)
+            )
+            enr_for_credit = enr_check.scalar_one_or_none()
+
     await db.delete(payment)
     await db.flush()
 
     if billing_period_id is not None:
         await _recalculate_billing_status(db, billing_period_id)
+
+    if was_paid_clase_suelta and enr_for_credit:
+        enr_for_credit.credits = max(0, enr_for_credit.credits - credits_to_revoke)
 
     await db.commit()
     return {"deleted": True, "payment_id": payment_id}
@@ -4317,6 +4570,78 @@ async def withdraw_admin_enrollment(
     return AdminEnrollmentResponse.model_validate(_build_admin_enrollment_response(
         enrollment, enrollment.student, enrollment.instrument, enrollment.teacher
     ))
+
+
+@router.post(
+    "/enrollments/{enrollment_id}/generate-matricula",
+    response_model=BillingPeriodResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generar cobro de matrícula para una inscripción",
+)
+async def generate_matricula(
+    enrollment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Genera un BillingPeriod de tipo 'matricula' para la inscripción indicada.
+    Idempotente: devuelve error si ya existe uno.
+    Solo aplica si enrollment_fee > 0.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    enr_result = await db.execute(
+        select(Enrollment)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            Enrollment.id == enrollment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+        .options(selectinload(Enrollment.teacher))
+    )
+    enrollment = enr_result.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Inscripción no encontrada.")
+
+    if not enrollment.enrollment_fee or enrollment.enrollment_fee <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Esta inscripción no tiene matrícula configurada."
+        )
+
+    existing = await db.execute(
+        select(BillingPeriod).where(
+            BillingPeriod.enrollment_id == enrollment_id,
+            BillingPeriod.charge_type == "matricula",
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail="Ya existe un cobro de matrícula para esta inscripción."
+        )
+
+    bp = BillingPeriod(
+        enrollment_id=enrollment_id,
+        charge_type="matricula",
+        description=None,
+        quantity=None,
+        period_year=None,
+        period_month=None,
+        base_amount=enrollment.enrollment_fee,
+        discount_applied=Decimal("0.00"),
+        final_amount=enrollment.enrollment_fee,
+        status=BillingPeriodStatus.PENDING,
+        due_date=date.today(),
+        notes=None,
+    )
+    db.add(bp)
+    await db.commit()
+    await db.refresh(bp)
+
+    teacher_name = enrollment.teacher.name if enrollment.teacher else "—"
+    return _build_bp_response(bp, Decimal("0.00"), teacher_name)
 
 
 class AgendaClassItem(BaseModel):

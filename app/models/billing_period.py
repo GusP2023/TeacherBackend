@@ -99,16 +99,16 @@ class BillingPeriod(Base, TimestampMixin):
         comment="ID del enrollment que genera este período"
     )
     
-    period_year: Mapped[int] = mapped_column(
+    period_year: Mapped[int | None] = mapped_column(
         Integer,
-        nullable=False,
-        comment="Año del período de cobro (ej: 2025)"
+        nullable=True,
+        comment="Año del período. NULL para matricula/extra/clase_suelta"
     )
     
-    period_month: Mapped[int] = mapped_column(
+    period_month: Mapped[int | None] = mapped_column(
         Integer,
-        nullable=False,
-        comment="Mes del período de cobro (1-12)"
+        nullable=True,
+        comment="Mes del período (1-12). NULL para matricula/extra/clase_suelta"
     )
     
     # ========================================
@@ -158,6 +158,26 @@ class BillingPeriod(Base, TimestampMixin):
         comment="Notas del administrador sobre este período"
     )
 
+    charge_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="cuota",
+        server_default="cuota",
+        comment="Tipo de cobro: cuota | matricula | extra | clase_suelta"
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Descripción libre para cobros extra y clases sueltas"
+    )
+
+    quantity: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Para clase_suelta: cantidad de créditos a otorgar al pagar"
+    )
+
     # ========================================
     # RELACIONES
     # ========================================
@@ -178,20 +198,13 @@ class BillingPeriod(Base, TimestampMixin):
     # ========================================
     
     __table_args__ = (
-        UniqueConstraint(
-            'enrollment_id',
-            'period_year',
-            'period_month',
-            name='uq_billing_period_enrollment_month'
-        ),
-        CheckConstraint(
-            'period_month >= 1 AND period_month <= 12',
-            name='check_billing_period_month_valid'
-        ),
         CheckConstraint(
             'final_amount >= 0',
             name='check_billing_period_final_amount'
         ),
+        # UniqueConstraint eliminado — reemplazado por índice parcial en DB
+        # que solo aplica cuando period_year/month no son NULL (cuotas)
+        # CheckConstraint de period_month también gestionado en DB (permite NULL)
     )
 
     def __repr__(self) -> str:
