@@ -297,13 +297,13 @@ async def create(db: AsyncSession, schedule_data: ScheduleCreate) -> Schedule:
     await db.commit()
     await db.refresh(schedule)
 
-    # 🔥 GENERAR CLASES AUTOMÁTICAMENTE (mes actual + mes siguiente)
+    # 🔥 GENERAR CLASES AUTOMÁTICAMENTE (mes actual + 2 meses siguientes)
     logger.info(f"Generando clases automáticas para enrollment {schedule_data.enrollment_id}...")
     try:
         stats = await generate_classes_for_enrollment(
             db,
             schedule_data.enrollment_id,
-            months_ahead=2,
+            months_ahead=3,
             from_date=schedule.valid_from
         )
         logger.info(f"Clases generadas: {stats}")
