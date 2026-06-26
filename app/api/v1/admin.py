@@ -776,6 +776,19 @@ async def create_billing_period(
                 status_code=400,
                 detail="Para cuotas es obligatorio especificar period_year y period_month."
             )
+        
+        existing_cuota = await db.execute(
+            select(BillingPeriod).where(
+                BillingPeriod.enrollment_id == data.enrollment_id,
+                BillingPeriod.period_year == data.period_year,
+                BillingPeriod.period_month == data.period_month,
+            )
+        )
+        if existing_cuota.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Ya existe un cobro para el período {data.period_month}/{data.period_year} en esta inscripción."
+            )
 
     if data.charge_type == "matricula":
         # Solo una matrícula por enrollment
