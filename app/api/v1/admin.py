@@ -4319,6 +4319,7 @@ async def list_admin_enrollments(
     query = (
         select(Enrollment)
         .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .join(Student, Student.id == Enrollment.student_id)
         .options(
             selectinload(Enrollment.student),
             selectinload(Enrollment.instrument),
