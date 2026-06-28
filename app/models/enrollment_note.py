@@ -16,7 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from sqlalchemy import (
     String, Text, Date, DateTime, Boolean, Enum as SQLEnum,
-    ForeignKey, CheckConstraint, Numeric
+    ForeignKey, CheckConstraint, Numeric, Integer
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import TYPE_CHECKING
@@ -67,6 +67,9 @@ class EnrollmentNote(Base, TimestampMixin):
 
     # Solo aplica a reminder y evaluation
     is_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    
+    # Minutos antes del due_date para alertar (e.g. 60 = 1 hora antes). NULL o 0 = A la hora.
+    notification_offset_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
 
     # ── Relaciones ──────────────────────────────────────────────────────────────
     enrollment: Mapped["Enrollment"] = relationship(lazy="selectin")

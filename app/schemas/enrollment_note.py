@@ -17,6 +17,7 @@ class EnrollmentNoteCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
     due_date: Optional[datetime_type] = None   # solo reminder/evaluation
     score: Optional[Decimal] = Field(None, ge=0, le=100)  # solo evaluation
+    notification_offset_minutes: Optional[int] = 0
 
 
 # ── Update ───────────────────────────────────────────────────────────────────
@@ -27,6 +28,7 @@ class EnrollmentNoteUpdate(BaseModel):
     due_date:     Optional[datetime_type]  = None
     score:        Optional[Decimal]        = Field(None, ge=0, le=100)
     is_completed: Optional[bool]           = None
+    notification_offset_minutes: Optional[int] = None
 
 
 # ── Response ─────────────────────────────────────────────────────────────────
@@ -42,5 +44,6 @@ class EnrollmentNoteResponse(BaseModel):
     due_date:      Optional[datetime_type]
     score:         Optional[Decimal]
     is_completed:  bool
+    notification_offset_minutes: Optional[int] = 0
     created_at:    datetime_type
     updated_at:    datetime_type
