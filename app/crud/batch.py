@@ -1,10 +1,11 @@
 import logging
 from typing import Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, and_, update
 
 from app.crud import student, enrollment, schedule, class_crud, attendance
 from app.models.enrollment import Enrollment
+from app.models.enrollment_note import EnrollmentNote
 from app.models.class_model import ClassType
 from app.schemas.batch import BatchOperation, BatchOperationResult, ClassRecoveryCreate
 from app.schemas.student import StudentCreate, StudentUpdate
@@ -12,6 +13,7 @@ from app.schemas.enrollment import EnrollmentCreate, EnrollmentUpdate
 from app.schemas.schedule import ScheduleCreate, ScheduleUpdate
 from app.schemas.class_schema import ClassCreate, ClassUpdate
 from app.schemas.attendance import AttendanceCreate, AttendanceUpdate
+from app.schemas.enrollment_note import EnrollmentNoteCreate, EnrollmentNoteUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -269,14 +271,14 @@ class BatchProcessor:
             elif op.type == "CLEAR_PARTIAL_RECOVERIES":
                 enrollment_id = payload_data.get('enrollment_id')
                 if not enrollment_id: raise ValueError("enrollment_id requerido para CLEAR_PARTIAL_RECOVERIES")
-                
+
                 # Verificar que el enrollment exista
                 result = await self.db.execute(
                     select(Enrollment).where(Enrollment.id == enrollment_id)
                 )
                 enr = result.scalar_one_or_none()
                 if not enr: raise ValueError(f"Enrollment {enrollment_id} no encontrado")
-                
+
                 await self.db.execute(
                     update(Enrollment)
                     .where(Enrollment.id == enrollment_id)
@@ -284,7 +286,86 @@ class BatchProcessor:
                 )
                 await self.db.commit()
                 result_id = enrollment_id
-            
+
+            # ==========================================
+            # ENROLLMENT NOTES
+            # ==========================================
+            elif op.type == "CREATE_NOTE":
+                # Limpiar teacher_id del payload (se inyecta desde el token)
+                # y validar enrollment_id resuelto
+                clean_payload = {k: v for k, v in payload_data.items() if k != 'teacher_id'}
+                schema = EnrollmentNoteCreate(**clean_payload)
+
+                # Verificar que el enrollment pertenece al teacher
+                enr_result = await self.db.execute(
+                    select(Enrollment).where(
+                        and_(
+                            Enrollment.id == schema.enrollment_id,
+                            Enrollment.teacher_id == self.teacher_id,
+                        )
+                    )
+                )
+                if not enr_result.scalar_one_or_none():
+                    raise ValueError(f"Enrollment {schema.enrollment_id} no encontrado o sin permisos")
+
+                note = EnrollmentNote(
+                    enrollment_id=schema.enrollment_id,
+                    teacher_id=self.teacher_id,
+                    type=schema.type,
+                    content=schema.content,
+                    due_date=schema.due_date,
+                    score=schema.score,
+                    is_completed=False,
+                )
+                self.db.add(note)
+                await self.db.commit()
+                await self.db.refresh(note)
+                result_id = note.id
+
+            elif op.type == "UPDATE_NOTE":
+                if not target_id:
+                    raise ValueError("ID requerido para UPDATE_NOTE")
+
+                note_result = await self.db.execute(
+                    select(EnrollmentNote).where(
+                        and_(
+                            EnrollmentNote.id == target_id,
+                            EnrollmentNote.teacher_id == self.teacher_id,
+                        )
+                    )
+                )
+                note = note_result.scalar_one_or_none()
+                if not note:
+                    raise ValueError(f"Nota {target_id} no encontrada o sin permisos")
+
+                clean_payload = {k: v for k, v in payload_data.items() if k != 'teacher_id'}
+                schema = EnrollmentNoteUpdate(**clean_payload)
+                for field, value in schema.model_dump(exclude_unset=True).items():
+                    setattr(note, field, value)
+
+                await self.db.commit()
+                result_id = target_id
+
+            elif op.type == "DELETE_NOTE":
+                if not target_id:
+                    raise ValueError("ID requerido para DELETE_NOTE")
+
+                note_result = await self.db.execute(
+                    select(EnrollmentNote).where(
+                        and_(
+                            EnrollmentNote.id == target_id,
+                            EnrollmentNote.teacher_id == self.teacher_id,
+                        )
+                    )
+                )
+                note = note_result.scalar_one_or_none()
+                if not note:
+                    raise ValueError(f"Nota {target_id} no encontrada o sin permisos")
+
+                await self.db.delete(note)
+                await self.db.commit()
+                result_id = target_id
+
             else:
                 raise ValueError(f"Tipo de operación no soportado: {op.type}")
 

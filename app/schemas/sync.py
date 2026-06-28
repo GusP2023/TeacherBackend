@@ -32,6 +32,7 @@ from app.schemas.schedule import ScheduleResponse
 from app.schemas.class_schema import ClassResponse
 from app.schemas.attendance import AttendanceResponse
 from app.schemas.instrument import InstrumentResponse
+from app.schemas.enrollment_note import EnrollmentNoteResponse
 
 
 # ========================================
@@ -122,6 +123,7 @@ class InitialSyncResponse(BaseModel):
     classes: List[ClassResponse]
     attendances: List[AttendanceResponse]
     instruments: List[InstrumentResponse]
+    notes: List[EnrollmentNoteResponse]
     metadata: SyncMetadata
 
 class SchedulesDelta(BaseModel):
@@ -131,7 +133,7 @@ class SchedulesDelta(BaseModel):
 class DeltaSyncResponse(BaseModel):
     """
     Response de sincronización incremental (delta) mejorado.
-    
+
     Estructura simplificada para facilitar el manejo de estados en frontend.
     """
     schedules: SchedulesDelta
@@ -139,8 +141,10 @@ class DeltaSyncResponse(BaseModel):
     classes: List[ClassResponse]
     students: List[StudentResponse] = []
     attendances: List[AttendanceResponse] = []
+    notes: List[EnrollmentNoteResponse] = []
     valid_class_ids: List[int] = []  # IDs de todas las clases reales del profesor (para purgar eliminadas)
     valid_attendance_ids: List[int] = [] # IDs de todas las asistencias reales del profesor
+    valid_note_ids: List[int] = [] # IDs de todas las notas reales del profesor
     sync_timestamp: str
 
 

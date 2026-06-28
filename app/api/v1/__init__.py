@@ -28,6 +28,7 @@ from app.api.v1.jobs import router as jobs_router
 from app.api.v1.sync import router as sync_router
 from app.api.v1.batch import router as batch_router
 from app.api.v1.websocket import router as websocket_router
+from app.api.v1.enrollment_notes import router as notes_router
 
 __all__ = [
     "auth_router",
@@ -42,5 +43,6 @@ __all__ = [
     "jobs_router",
     "sync_router",
     "batch_router",
-    "websocket_router"
+    "websocket_router",
+    "notes_router"
 ]

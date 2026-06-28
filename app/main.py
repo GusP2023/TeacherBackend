@@ -49,7 +49,8 @@ from app.api.v1 import (
     jobs_router,
     sync_router,
     batch_router,
-    websocket_router
+    websocket_router,
+    notes_router,
 )
 
 # ========================================
@@ -78,6 +79,9 @@ from app.models import (
     ClassType,
     ClassFormat,
     AttendanceStatus,
+    # Enrollment Notes
+    EnrollmentNote,
+    NoteType,
 )
 
 
@@ -297,6 +301,7 @@ app.include_router(jobs_router,        prefix=f"{settings.API_V1_PREFIX}/jobs", 
 app.include_router(websocket_router,   prefix=f"{settings.API_V1_PREFIX}",              tags=["WebSocket"])
 app.include_router(sync_router,        prefix=f"{settings.API_V1_PREFIX}/sync",         tags=["Sync"])
 app.include_router(batch_router,       prefix=f"{settings.API_V1_PREFIX}/batch",        tags=["Batch"])
+app.include_router(notes_router,       prefix=f"{settings.API_V1_PREFIX}/notes",        tags=["Notes"])
 
 
 # ========================================

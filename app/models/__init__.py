@@ -48,6 +48,11 @@ from .enrollment import (
     EnrollmentLevel
 )
 
+from .enrollment_note import (
+    EnrollmentNote,
+    NoteType,
+)
+
 # ========================================
 # MODELOS DE HORARIOS Y CLASES
 # ========================================
@@ -158,6 +163,10 @@ __all__ = [
     # Enums de Enrollment
     "EnrollmentStatus",
     "EnrollmentLevel",
+    
+    # Enrollment Notes
+    "EnrollmentNote",
+    "NoteType",
     
     # Enums de Schedule
     "DayOfWeek",

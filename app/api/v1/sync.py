@@ -28,6 +28,7 @@ from app.models import (
     Class,
     Attendance,
     Instrument,
+    EnrollmentNote,
 )
 from app.schemas.sync import (
     InitialSyncRequest,
@@ -148,7 +149,19 @@ async def sync_initial(
     instruments = instruments_result.scalars().all()
 
     # ========================================
-    # 7. METADATA
+    # 7. CARGAR NOTAS DEL PROFESOR
+    # ========================================
+    # Solo notas propias del teacher (teacher_id).
+    # Las notas de profesores anteriores se cargan
+    # on-demand cuando el profesor abre el historial del alumno.
+    notes_query = select(EnrollmentNote).where(
+        EnrollmentNote.teacher_id == current_teacher.id
+    )
+    notes_result = await db.execute(notes_query)
+    notes = notes_result.scalars().all()
+
+    # ========================================
+    # 8. METADATA
     # ========================================
     total_records = (
         len(students)
@@ -157,6 +170,7 @@ async def sync_initial(
         + len(classes)
         + len(attendances)
         + len(instruments)
+        + len(notes)
     )
 
     metadata = SyncMetadata(
@@ -165,7 +179,7 @@ async def sync_initial(
     )
 
     # ========================================
-    # 8. RESPUESTA
+    # 9. RESPUESTA
     # ========================================
     return InitialSyncResponse(
         students=students,
@@ -174,6 +188,7 @@ async def sync_initial(
         classes=classes,
         attendances=attendances,
         instruments=instruments,
+        notes=notes,
         metadata=metadata,
     )
 
@@ -272,7 +287,26 @@ async def sync_delta(
     )
     attendances = attendances_result.scalars().all()
 
-    # 7. IDs de todas las clases vigentes del profesor (para que el móvil
+    # 7. Notas del profesor actualizadas desde el último sync
+    notes_result = await db.execute(
+        select(EnrollmentNote).where(
+            and_(
+                EnrollmentNote.teacher_id == current_teacher.id,
+                EnrollmentNote.updated_at > last_sync_date,
+            )
+        )
+    )
+    notes = notes_result.scalars().all()
+
+    # 8. IDs de TODAS las notas vigentes del profesor (para purgar eliminadas en mobile)
+    valid_notes_result = await db.execute(
+        select(EnrollmentNote.id).where(
+            EnrollmentNote.teacher_id == current_teacher.id
+        )
+    )
+    valid_note_ids = [row[0] for row in valid_notes_result.all()]
+
+    # 9. IDs de todas las clases vigentes del profesor (para que el móvil
     #    pueda detectar y purgar clases que fueron eliminadas en el backend).
     #    Solo seleccionamos la columna id → query muy liviana.
     today = datetime.now(timezone.utc).date()
@@ -310,8 +344,10 @@ async def sync_delta(
         "classes": classes,
         "students": students,
         "attendances": attendances,
+        "notes": notes,
         "valid_class_ids": valid_class_ids,
         "valid_attendance_ids": valid_attendance_ids,
+        "valid_note_ids": valid_note_ids,
         "sync_timestamp": datetime.now().isoformat()
     }
 
