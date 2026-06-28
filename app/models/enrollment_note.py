@@ -12,10 +12,10 @@ Tipos:
   - evaluation:  Como reminder pero con campo score opcional (0-100)
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from sqlalchemy import (
-    String, Text, Date, Boolean, Enum as SQLEnum,
+    String, Text, Date, DateTime, Boolean, Enum as SQLEnum,
     ForeignKey, CheckConstraint, Numeric
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -60,7 +60,7 @@ class EnrollmentNote(Base, TimestampMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False)
 
     # Solo para reminder y evaluation
-    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Solo para evaluation (0.00 – 100.00)
     score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)

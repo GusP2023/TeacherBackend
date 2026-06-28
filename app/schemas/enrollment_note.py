@@ -3,6 +3,7 @@
 from datetime import date as datetime_date, datetime as datetime_type
 from decimal import Decimal
 from typing import Optional
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enrollment_note import NoteType
@@ -14,7 +15,7 @@ class EnrollmentNoteCreate(BaseModel):
     enrollment_id: int
     type: NoteType
     content: str = Field(..., min_length=1, max_length=2000)
-    due_date: Optional[datetime_date] = None   # solo reminder/evaluation
+    due_date: Optional[datetime_type] = None   # solo reminder/evaluation
     score: Optional[Decimal] = Field(None, ge=0, le=100)  # solo evaluation
 
 
@@ -23,7 +24,7 @@ class EnrollmentNoteCreate(BaseModel):
 class EnrollmentNoteUpdate(BaseModel):
     """Todos los campos opcionales. Solo el autor puede actualizar."""
     content:      Optional[str]            = Field(None, min_length=1, max_length=2000)
-    due_date:     Optional[datetime_date]  = None
+    due_date:     Optional[datetime_type]  = None
     score:        Optional[Decimal]        = Field(None, ge=0, le=100)
     is_completed: Optional[bool]           = None
 
@@ -38,7 +39,7 @@ class EnrollmentNoteResponse(BaseModel):
     teacher_id:    int
     type:          NoteType
     content:       str
-    due_date:      Optional[datetime_date]
+    due_date:      Optional[datetime_type]
     score:         Optional[Decimal]
     is_completed:  bool
     created_at:    datetime_type

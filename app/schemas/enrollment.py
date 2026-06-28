@@ -13,6 +13,7 @@ IMPORTANTE:
 """
 from datetime import date, datetime
 from decimal import Decimal
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 
