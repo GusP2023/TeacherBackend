@@ -163,7 +163,7 @@ async def monthly_class_generation_job():
     """
     Job mensual: Genera clases del próximo mes
 
-    Ejecuta día 10 de cada mes a las 2:00 AM
+    Ejecuta día 1 de cada mes a las 2:00 AM
     Procesa todos los enrollments activos y genera clases para el próximo mes.
 
     Lógica:
@@ -226,22 +226,16 @@ async def check_and_run_missed_job():
     Verifica si el job mensual se perdió por reinicio del servidor.
 
     Se ejecuta una sola vez en el startup, después de que la BD está lista.
-    Si ya pasó el día 6 del mes actual y el job no se ejecutó este mes,
-    lo ejecuta inmediatamente y actualiza el marcador.
+    Si el job no se ejecutó este mes, lo ejecuta inmediatamente y actualiza el marcador.
 
     Lógica:
-    - Solo actuar si today.day >= 6
     - Verificar marcador en JobRunLog para "monthly_class_generation"
     - Si no existe o last_run_year_month != mes actual → ejecutar
     - Actualizar marcador después de ejecutar
     """
     today = date.today()
 
-    # Solo actuar si ya pasó el día 6 del mes actual
-    if today.day < 6:
-        print("[SCHEDULER] Día < 6, no verificar job mensual")
-        return
-
+    # El job debe correr el día 1, así que cualquier día del mes es válido para verificar
     current_month = today.strftime("%Y-%m")
 
     try:
@@ -298,10 +292,10 @@ def start_scheduler():
 
     Se ejecuta automáticamente en el startup event de FastAPI.
     """
-    # Job mensual: día 6 de cada mes a las 00:00 AM - Generación de clases
+    # Job mensual: día 1 de cada mes a las 2:00 AM - Generación de clases
     scheduler.add_job(
         monthly_class_generation_job,
-        trigger=CronTrigger(day=6, hour=0, minute=0),
+        trigger=CronTrigger(day=1, hour=2, minute=0),
         id='generate_monthly_classes',
         name='Generación mensual de clases',
         replace_existing=True  # Reemplazar si ya existe (útil en desarrollo)
@@ -330,7 +324,7 @@ def start_scheduler():
 
     scheduler.start()
     print("[SCHEDULER] ✅ Iniciado - Jobs mensuales configurados:")
-    print("  - Clases: día 6, 00:00 AM")
+    print("  - Clases: día 1, 02:00 AM")
     print("  - Billing Periods: día 1, 00:00 AM")
     print("  - Personnel Payments: deshabilitado (flujo manual)")
 

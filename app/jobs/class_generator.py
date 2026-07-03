@@ -8,7 +8,7 @@ REGLAS DE NEGOCIO:
 1. Generar clases desde HOY (o valid_from si es futuro) hasta fin del mes actual + 2 meses completos
    - Ejemplo: Hoy 19 dic → hasta 28 feb (dic + ene + feb)
    - Ejemplo: valid_from 10 ene → hasta 31 mar (ene + feb + mar)
-2. Job mensual ejecuta día 10 de cada mes a las 2 AM
+2. Job mensual ejecuta día 1 de cada mes a las 2 AM
 3. Saltar clases duplicadas (misma fecha/hora/enrollment)
 4. NO generar en feriados
 5. Solo generar para enrollments con status='active'
@@ -205,9 +205,10 @@ async def _generate_classes_for_schedule(
     # anteriores a su inscripción.
     start_date = max(from_date, schedule.valid_from)
 
-    # Fecha final: último día del mes actual + months_ahead meses completos
+    # Fecha final: último día del mes resultante (mes actual + months_ahead meses completos)
     # Ejemplo: start_date = 19 dic, months_ahead = 2 → end_date = 28 feb
-    end_date = add_months(start_date, months_ahead)
+    target_date = add_months(start_date, months_ahead)
+    end_date = get_last_day_of_month(target_date.year, target_date.month)
 
     # Si hay valid_until en el schedule, usar el menor
     if schedule.valid_until:
@@ -384,8 +385,8 @@ async def regenerate_classes_manual(
     
     RANGO DE FECHAS:
     - Permite seleccionar hasta 1 mes atrás desde hoy
-    - Genera exactamente 3 meses desde la fecha seleccionada
-    - Ejemplo: Si seleccionas 1-mar, genera hasta 1-jun
+    - Genera exactamente hasta el final del tercer mes (incluyendo el mes de inicio)
+    - Ejemplo: Si seleccionas 1-mar, genera hasta el 31-may
     
     FLUJO:
     - Usuario selecciona fecha inicio (puede ser 1 mes atrás o más adelante)
@@ -486,7 +487,7 @@ async def regenerate_classes_manual(
             result = await generate_classes_for_enrollment(
                 db,
                 enrollment.id,
-                months_ahead=3,  # Exactamente 3 meses
+                months_ahead=2,  # Mes actual + 2 siguientes hasta fin de mes (3 meses totales)
                 from_date=from_date
             )
             
