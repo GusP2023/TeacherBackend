@@ -303,7 +303,7 @@ async def create(db: AsyncSession, schedule_data: ScheduleCreate) -> Schedule:
         stats = await generate_classes_for_enrollment(
             db,
             schedule_data.enrollment_id,
-            months_ahead=3,
+            months_ahead=2,
             from_date=schedule.valid_from
         )
         logger.info(f"Clases generadas: {stats}")

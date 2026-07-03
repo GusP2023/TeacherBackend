@@ -117,19 +117,20 @@ async def check_missed_job_endpoint(
 @router.post("/generate-classes/{enrollment_id}")
 async def generate_for_specific_enrollment(
     enrollment_id: int,
-    months: int = Query(default=2, ge=1, le=6, description="Meses a generar (1-6)"),
+    months: int = Query(default=2, ge=0, le=6, description="Meses adelante a generar (0-6)"),
+    from_date: str = Query(default=None, description="Fecha desde la cual generar (YYYY-MM-DD)"),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
     """
-    Genera clases para una inscripción específica (ONBOARDING)
+    Genera clases para una inscripción específica (ONBOARDING o RELLENO)
 
-    Usado principalmente al inscribir un nuevo alumno.
-    Genera clases para los próximos N meses desde valid_from del Schedule.
+    Genera clases para los próximos N meses desde from_date (o hoy por defecto).
 
     Args:
         enrollment_id: ID de la inscripción
         months: Cuántos meses generar (default: 2, máximo: 6)
+        from_date: Fecha desde la cual generar (opcional)
 
     Returns:
         Estadísticas de generación:
@@ -140,7 +141,18 @@ async def generate_for_specific_enrollment(
     Raises:
         400: Si el enrollment no existe o está inactivo
     """
-    result = await generate_classes_for_enrollment(db, enrollment_id, months)
+    # Parsear from_date si se envía
+    from_date_obj = None
+    if from_date:
+        try:
+            from_date_obj = date_type.fromisoformat(from_date)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Formato de fecha inválido: {from_date}. Use YYYY-MM-DD"
+            )
+
+    result = await generate_classes_for_enrollment(db, enrollment_id, months, from_date_obj)
 
     if "error" in result:
         raise HTTPException(
