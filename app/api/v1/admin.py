@@ -3645,14 +3645,18 @@ async def list_availability(
     if active_only:
         query = query.where(TeacherAvailability.active == True)
 
+    # Add CASE expression to SELECT for DISTINCT compatibility
+    day_order_case = case(
+        *( (TeacherAvailability.day == d, i) for i, d in enumerate(
+            ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+        ) ),
+        else_=99
+    )
+    query = query.add_columns(day_order_case.label('day_order'))
+
     query = query.order_by(
         TeacherAvailability.teacher_id,
-        case(
-            *( (TeacherAvailability.day == d, i) for i, d in enumerate(
-                ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-            ) ),
-            else_=99
-        ),
+        day_order_case,
         TeacherAvailability.time_start
     )
 
