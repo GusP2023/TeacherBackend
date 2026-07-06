@@ -3647,7 +3647,7 @@ async def list_availability(
 
     query = query.order_by(
         TeacherAvailability.teacher_id,
-        func.case(
+        case(
             *( (TeacherAvailability.day == d, i) for i, d in enumerate(
                 ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
             ) ),
