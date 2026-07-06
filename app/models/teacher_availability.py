@@ -79,6 +79,10 @@ class TeacherAvailability(Base, TimestampMixin):
         lazy="noload"
     )
 
+    @property
+    def teacher_name(self) -> str:
+        return self.teacher.name if self.teacher else ""
+
     def __repr__(self) -> str:
         """Representación string del objeto para debugging"""
         return f"<TeacherAvailability(id={self.id}, teacher_id={self.teacher_id}, day='{self.day}', time_start='{self.time_start}', time_end='{self.time_end}')>"

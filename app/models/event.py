@@ -24,7 +24,7 @@ Tipos de evento (event_type):
   - 'other'       → Cualquier otro evento
 """
 
-from datetime import date, time
+from datetime import date as datetime_date, time
 from sqlalchemy import String, Text, Integer, Date, Time, ForeignKey, Table, Column, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import TYPE_CHECKING, List
@@ -173,7 +173,7 @@ class Event(Base, TimestampMixin):
         comment="Tipo de evento: rehearsal | workshop | masterclass | external | other"
     )
 
-    date: Mapped[date] = mapped_column(
+    date: Mapped[datetime_date] = mapped_column(
         Date,
         nullable=False,
         index=True,

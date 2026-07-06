@@ -60,7 +60,8 @@ from app.schemas.teacher import TeacherUpdate
 from app.schemas.billing import (
     BillingPeriodResponse, BillingPeriodUpdate, BillingPeriodCreate,
     GenerateBillingPeriodsResponse, StudentBillingSummary,
-    StudentBrief, EnrollmentBrief,
+    StudentBrief as BillingStudentBrief,
+    EnrollmentBrief,
     PaymentCreate, PaymentResponse,
 )
 from app.schemas.personnel_payment import (
@@ -235,7 +236,7 @@ async def list_org_students(
             email=student.email,
             birthdate=student.birthdate,
             notes=student.notes,
-            sync_id=student.sync_id,
+            sync_id=str(student.sync_id) if student.sync_id is not None else None,
             active=enrollment_stats.get(student.id, {"count": 0})["count"] > 0,
             created_at=student.created_at,
             updated_at=student.updated_at,
@@ -449,7 +450,7 @@ def _build_bp_response(bp: BillingPeriod, amount_paid: Decimal,
     return BillingPeriodResponse(
         id=bp.id,
         enrollment_id=bp.enrollment_id,
-        student=StudentBrief(
+        student=BillingStudentBrief(
             id=student.id if student else 0,
             name=student.name if student else "—",
         ),
@@ -616,7 +617,7 @@ async def get_billing_summary(
     summaries = []
     for sid, info in student_map.items():
         bps = student_bps.get(sid, [])
-        total_pending = sum(b["saldo"] for b in bps)
+        total_pending = Decimal(str(sum(b["saldo"] for b in bps)))
         has_overdue = any(
             b["due_date"] and b["due_date"] < today for b in bps
         )
@@ -1954,7 +1955,7 @@ async def create_room(
             found_ids = {i.id for i in instruments}
             missing = [i for i in unique_instrument_ids if i not in found_ids]
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Instrumentos no encontrados: {missing}")
-        room.instruments = instruments
+        room.instruments = list(instruments)
 
     await db.commit()
     await db.refresh(room)
@@ -1986,7 +1987,7 @@ async def _load_instruments_by_ids(db: AsyncSession, instrument_ids: list[int]) 
         found_ids = {i.id for i in instruments}
         missing = [i for i in unique_instrument_ids if i not in found_ids]
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Instrumentos no encontrados: {missing}")
-    return instruments
+    return list(instruments)
 
 
 @router.get(
@@ -2651,7 +2652,7 @@ async def _load_teachers_for_organization(db: AsyncSession, teacher_ids: list[in
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Teacher no encontrado en tu organización: {missing[0]}.",
         )
-    return teachers
+    return list(teachers)
 
 
 async def _load_students_for_organization(db: AsyncSession, student_ids: list[int], org_id: int) -> list[Student]:
@@ -2672,7 +2673,7 @@ async def _load_students_for_organization(db: AsyncSession, student_ids: list[in
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Student no encontrado en tu organización: {missing[0]}.",
         )
-    return students
+    return list(students)
 
 
 @router.post(
@@ -2909,17 +2910,17 @@ async def update_event(
         else:
             event.room_id = None
 
-    if "title" in data_dict:
+    if "title" in data_dict and data.title is not None:
         event.title = data.title
     if "description" in data_dict:
         event.description = data.description
-    if "event_type" in data_dict:
+    if "event_type" in data_dict and data.event_type is not None:
         event.event_type = data.event_type
-    if "date" in data_dict:
+    if "date" in data_dict and data.date is not None:
         event.date = data.date
-    if "time_start" in data_dict:
+    if "time_start" in data_dict and data.time_start is not None:
         event.time_start = data.time_start
-    if "duration" in data_dict:
+    if "duration" in data_dict and data.duration is not None:
         event.duration = data.duration
     if "guest_name" in data_dict:
         event.guest_name = data.guest_name
@@ -3348,6 +3349,7 @@ class AvailabilityUpdate(BaseModel):
 class AvailabilityResponse(BaseModel):
     id: int
     teacher_id: int
+    teacher_name: str = ""
     day: str
     time_start: time_module
     time_end: time_module
@@ -3602,6 +3604,7 @@ async def delete_teacher_availability(
 )
 async def list_availability(
     teacher_id: int | None = Query(None, description="Filtrar por teacher_id"),
+    instrument_id: int | None = Query(None, description="Filtrar por instrumento (cátedra)"),
     day: str | None = Query(None, description="Filtrar por día de la semana"),
     active_only: bool = Query(True, description="Solo bloques activos"),
     db: AsyncSession = Depends(get_db),
@@ -3614,13 +3617,27 @@ async def list_availability(
     if not current_teacher.organization_id:
         return []
 
-    query = select(TeacherAvailability).join(Teacher).where(
+    query = select(TeacherAvailability).options(
+        selectinload(TeacherAvailability.teacher)
+    ).join(Teacher).where(
         Teacher.organization_id == current_teacher.organization_id,
         Teacher.is_instructor == True,
     )
 
     if teacher_id is not None:
         query = query.where(TeacherAvailability.teacher_id == teacher_id)
+
+    if instrument_id is not None:
+        query = (
+            query
+            .join(
+                Enrollment,
+                (Enrollment.teacher_id == TeacherAvailability.teacher_id) &
+                (Enrollment.instrument_id == instrument_id) &
+                (Enrollment.status == EnrollmentStatus.ACTIVE)
+            )
+            .distinct()
+        )
 
     if day is not None:
         query = query.where(TeacherAvailability.day == day)
