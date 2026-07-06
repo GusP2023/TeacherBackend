@@ -17,13 +17,20 @@ from datetime import date, date as datetime_date, time as time_module, datetime 
 from decimal import Decimal
 from typing import Optional, Literal
 
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
+# pyrefly: ignore [missing-import]
 from sqlalchemy import select, or_, func, update, and_, case, delete
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import selectinload, joinedload
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
+# pyrefly: ignore [missing-import]
 from app.core.database import get_db
+# pyrefly: ignore [missing-import]
 from app.core.security import require_permission
 from app.core.permissions import (
     PERMISSION_DEFAULTS,
@@ -1815,7 +1822,7 @@ async def get_branch_hours(
         select(BranchHours)
         .where(BranchHours.branch_id == branch_id)
         .order_by(
-            func.case(
+            case(
                 *((BranchHours.day_of_week == d, i) for i, d in enumerate(DAY_OF_WEEK_ORDER)),
                 else_=99,
             )
@@ -1861,7 +1868,7 @@ async def upsert_branch_hours(
         select(BranchHours)
         .where(BranchHours.branch_id == branch_id)
         .order_by(
-            func.case(
+            case(
                 *((BranchHours.day_of_week == d, i) for i, d in enumerate(DAY_OF_WEEK_ORDER)),
                 else_=99,
             )
@@ -2484,8 +2491,9 @@ async def update_teacher_permissions(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Clave de permiso desconocida: '{key}' para rol '{target.role}'.",
                 )
-            clean[key] = bool(value)
+            clean[key] = value
         # Asignar con flag_modified para forzar que SQLAlchemy detecte el cambio en JSONB
+        # pyrefly: ignore [missing-import]
         from sqlalchemy.orm.attributes import flag_modified
         target.custom_permissions = clean if clean else None
         flag_modified(target, "custom_permissions")

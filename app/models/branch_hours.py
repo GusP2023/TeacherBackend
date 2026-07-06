@@ -2,7 +2,9 @@
 Modelo BranchHours - Horarios de apertura por día de la semana de una sucursal.
 """
 
+# pyrefly: ignore [missing-import]
 from sqlalchemy import Boolean, Integer, ForeignKey, String, Time
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import TYPE_CHECKING
 
