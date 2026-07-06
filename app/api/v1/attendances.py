@@ -332,6 +332,7 @@ async def update_attendance(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    await notify_data_change(teacher_id, "attendance", "update", updated_attendance.id)
+    if updated_attendance:
+        await notify_data_change(teacher_id, "attendance", "update", updated_attendance.id)
     
     return updated_attendance
