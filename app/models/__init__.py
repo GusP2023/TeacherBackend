@@ -62,6 +62,7 @@ from .schedule import (
 )
 
 from .branch import Branch
+from .branch_hours import BranchHours
 from .room import Room
 from .room_assignment import RoomAssignment
 from .room_override import RoomOverride
@@ -171,6 +172,7 @@ __all__ = [
     # Enums de Schedule
     "DayOfWeek",
     "Branch",
+    "BranchHours",
     "Room",
     "RoomAssignment",
     "RoomOverride",

@@ -2,7 +2,7 @@
 Modelo Branch - Sucursal/Sede de la institución.
 """
 
-from sqlalchemy import String, Boolean, Integer, ForeignKey
+from sqlalchemy import String, Boolean, Integer, ForeignKey, Time
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import TYPE_CHECKING, List
 
@@ -11,6 +11,7 @@ from .base import Base, TimestampMixin
 if TYPE_CHECKING:
     from .organization import Organization
     from .room import Room
+    from .branch_hours import BranchHours
 
 
 class Branch(Base, TimestampMixin):
@@ -51,6 +52,14 @@ class Branch(Base, TimestampMixin):
         comment="Indica si la sucursal está activa"
     )
 
+    slot_duration: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=45,
+        server_default="45",
+        comment="Duración de cada slot en minutos (por defecto 45)",
+    )
+
     organization: Mapped["Organization"] = relationship(
         back_populates="branches",
         lazy="noload"
@@ -60,6 +69,13 @@ class Branch(Base, TimestampMixin):
         back_populates="branch",
         cascade="all, delete-orphan",
         lazy="noload"
+    )
+
+    hours: Mapped[List["BranchHours"]] = relationship(
+        back_populates="branch",
+        cascade="all, delete-orphan",
+        lazy="noload",
+        order_by="BranchHours.day_of_week",
     )
 
     def __repr__(self) -> str:

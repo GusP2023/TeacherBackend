@@ -13,13 +13,13 @@ Endpoints:
     GET   /admin/permissions/schema              → Ver qué permisos son configurables (con labels)
 """
 
-from datetime import date, date as datetime_date, time as time_module, datetime as datetime_type, timedelta
+from datetime import date, date as datetime_date, time as time_module, datetime as datetime_type, timedelta, time as time_type
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func, update, and_, case
+from sqlalchemy import select, or_, func, update, and_, case, delete
 from sqlalchemy.orm import selectinload, joinedload
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
@@ -31,6 +31,7 @@ from app.core.permissions import (
 )
 from app.models.attendance import Attendance, AttendanceStatus
 from app.models.branch import Branch
+from app.models.branch_hours import BranchHours
 from app.models.class_model import Class, ClassFormat, ClassType, ClassStatus
 from app.models.event import Event, EVENT_TYPES, event_teachers, event_students
 from app.models.room import Room
@@ -1651,9 +1652,25 @@ async def get_teacher_permissions(
 # ────────────────────────────────────────────────────
 
 
+DAY_OF_WEEK_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+
+class BranchHourItem(BaseModel):
+    day_of_week: Literal['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
+    morning_open: time_type | None = None
+    morning_close: time_type | None = None
+    afternoon_open: time_type | None = None
+    afternoon_close: time_type | None = None
+    is_closed: bool = False
+
+class BranchHourResponse(BranchHourItem):
+    id: int
+    branch_id: int
+    model_config = ConfigDict(from_attributes=True)
+
 class BranchCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     address: str | None = Field(None, max_length=255)
+    slot_duration: int = Field(45, ge=15, le=120)
 
 
 class BranchResponse(BaseModel):
@@ -1662,6 +1679,8 @@ class BranchResponse(BaseModel):
     name: str
     address: str | None = None
     active: bool
+    slot_duration: int
+    hours: list[BranchHourResponse] = []
     created_at: datetime_type
     updated_at: datetime_type
 
@@ -1672,6 +1691,7 @@ class BranchUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
     address: str | None = Field(None, max_length=255)
     active: bool | None = None
+    slot_duration: int | None = Field(None, ge=15, le=120)
 
 
 @router.post(
@@ -1695,6 +1715,7 @@ async def create_branch(
         organization_id=current_teacher.organization_id,
         name=data.name,
         address=data.address,
+        slot_duration=data.slot_duration,
     )
     db.add(branch)
     await db.commit()
@@ -1717,7 +1738,7 @@ async def list_branches(
 
     query = select(Branch).where(
         Branch.organization_id == current_teacher.organization_id
-    )
+    ).options(selectinload(Branch.hours))
     if not include_inactive:
         query = query.where(Branch.active.is_(True))
     query = query.order_by(Branch.name)
@@ -1762,10 +1783,91 @@ async def update_branch(
         branch.address = data.address
     if data.active is not None:
         branch.active = data.active
+    if data.slot_duration is not None:
+        branch.slot_duration = data.slot_duration
 
     await db.commit()
     await db.refresh(branch)
     return branch
+
+
+@router.get(
+    "/branches/{branch_id}/hours",
+    response_model=list[BranchHourResponse],
+    summary="Obtener horarios de apertura de una sucursal",
+)
+async def get_branch_hours(
+    branch_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    result = await db.execute(
+        select(Branch).where(
+            Branch.id == branch_id,
+            Branch.organization_id == current_teacher.organization_id,
+        )
+    )
+    branch = result.scalar_one_or_none()
+    if not branch:
+        raise HTTPException(status_code=404, detail="Sucursal no encontrada.")
+
+    result = await db.execute(
+        select(BranchHours)
+        .where(BranchHours.branch_id == branch_id)
+        .order_by(
+            func.case(
+                *((BranchHours.day_of_week == d, i) for i, d in enumerate(DAY_OF_WEEK_ORDER)),
+                else_=99,
+            )
+        )
+    )
+    return result.scalars().all()
+
+
+@router.put(
+    "/branches/{branch_id}/hours",
+    response_model=list[BranchHourResponse],
+    summary="Reemplazar horarios de apertura de una sucursal (upsert completo)",
+)
+async def upsert_branch_hours(
+    branch_id: int,
+    data: list[BranchHourItem],
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    result = await db.execute(
+        select(Branch).where(
+            Branch.id == branch_id,
+            Branch.organization_id == current_teacher.organization_id,
+        )
+    )
+    branch = result.scalar_one_or_none()
+    if not branch:
+        raise HTTPException(status_code=404, detail="Sucursal no encontrada.")
+
+    # Eliminar registros existentes y reemplazar
+    await db.execute(
+        delete(BranchHours).where(BranchHours.branch_id == branch_id)
+    )
+
+    new_hours = [
+        BranchHours(branch_id=branch_id, **item.model_dump())
+        for item in data
+    ]
+    db.add_all(new_hours)
+    await db.commit()
+
+    result = await db.execute(
+        select(BranchHours)
+        .where(BranchHours.branch_id == branch_id)
+        .order_by(
+            func.case(
+                *((BranchHours.day_of_week == d, i) for i, d in enumerate(DAY_OF_WEEK_ORDER)),
+                else_=99,
+            )
+        )
+    )
+    return result.scalars().all()
 
 
 class RoomCreate(BaseModel):
