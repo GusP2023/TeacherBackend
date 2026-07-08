@@ -12,7 +12,7 @@ Estrategia:
 """
 
 from datetime import datetime, timezone, date
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Any
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -182,13 +182,13 @@ async def sync_initial(
     # 9. RESPUESTA
     # ========================================
     return InitialSyncResponse(
-        students=students,
-        enrollments=enrollments,
-        schedules=schedules,
-        classes=classes,
-        attendances=attendances,
-        instruments=instruments,
-        notes=notes,
+        students=list(students),  # type: ignore
+        enrollments=list(enrollments),  # type: ignore
+        schedules=list(schedules),  # type: ignore
+        classes=list(classes),  # type: ignore
+        attendances=list(attendances),  # type: ignore
+        instruments=list(instruments),  # type: ignore
+        notes=list(notes),  # type: ignore
         metadata=metadata,
     )
 
@@ -340,14 +340,14 @@ async def sync_delta(
             "active": active_schedules,
             "deactivated": deactivated_schedules
         },
-        "enrollments": enrollments,
-        "classes": classes,
-        "students": students,
-        "attendances": attendances,
-        "notes": notes,
-        "valid_class_ids": valid_class_ids,
-        "valid_attendance_ids": valid_attendance_ids,
-        "valid_note_ids": valid_note_ids,
+        "enrollments": list(enrollments),
+        "classes": list(classes),
+        "students": list(students),
+        "attendances": list(attendances),
+        "notes": list(notes),
+        "valid_class_ids": list(valid_class_ids),
+        "valid_attendance_ids": list(valid_attendance_ids),
+        "valid_note_ids": list(valid_note_ids),
         "sync_timestamp": datetime.now().isoformat()
     }
 
@@ -376,7 +376,7 @@ async def verify_operations(
     for op in operations:
         ids_by_entity[op.entity_type].add(op.entity_id)
 
-    entities: dict[str, dict[int, any]] = {
+    entities: dict[str, dict[int, Any]] = {
         "student": {},
         "enrollment": {},
         "schedule": {},

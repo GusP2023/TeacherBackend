@@ -42,7 +42,7 @@ async def status():
             status_icon = "✅" if org.active else "❌"
             print(f"  {status_icon} [{org.id}] {org.name}")
             print(f"       slug: {org.slug}")
-            print(f"       permisos custom: {'sí' if org.role_permissions else 'no (usa defaults)'}")
+            print(f"       slug: {org.slug}")
             print(f"       miembros: {len(members)} | admins: {len(admins)}")
             for t in members:
                 role_icon = "👑" if t.role == 'org_admin' else "👤"

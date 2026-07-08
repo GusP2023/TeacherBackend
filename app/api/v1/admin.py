@@ -49,6 +49,7 @@ from app.models.teacher_availability import TeacherAvailability
 from app.models.enrollment import Enrollment, EnrollmentStatus, EnrollmentLevel
 from app.models.billing_period import BillingPeriod, BillingPeriodStatus
 from app.models.payment import Payment, PaymentConcept, PaymentMethod
+from app.models.credit_transaction import CreditTransaction, CreditTransactionSource, CreditTransactionReferenceType
 from app.models.personnel_payment import PersonnelPayment, PersonnelPaymentStatus
 from app.models.fee_discount import FeeDiscount, DiscountType
 from app.models.expense import Expense, ExpenseCategory
@@ -1095,7 +1096,20 @@ async def create_payment(
         await db.flush()
         await db.refresh(bp)
         if bp.status == BillingPeriodStatus.PAID:
-            enrollment.credits += (bp.quantity or 1)
+            credits_amount = bp.quantity or 1
+            enrollment.credits += credits_amount
+
+            # Insertar transacción en el ledger
+            credit_transaction = CreditTransaction(
+                enrollment_id=enrollment.id,
+                amount=credits_amount,
+                source_type=CreditTransactionSource.CLASE_SUELTA_PAYMENT,
+                reference_type=CreditTransactionReferenceType.PAYMENT,
+                reference_id=payment.id,
+                note=None,
+                created_by=current_teacher.id
+            )
+            db.add(credit_transaction)
 
     await db.commit()
     await db.refresh(payment)
@@ -1241,6 +1255,18 @@ async def delete_payment(
 
     if was_paid_clase_suelta and enr_for_credit:
         enr_for_credit.credits = max(0, enr_for_credit.credits - credits_to_revoke)
+
+        # Insertar transacción en el ledger
+        credit_transaction = CreditTransaction(
+            enrollment_id=enr_for_credit.id,
+            amount=-credits_to_revoke,
+            source_type=CreditTransactionSource.CLASE_SUELTA_PAYMENT_REVERTED,
+            reference_type=CreditTransactionReferenceType.PAYMENT,
+            reference_id=payment_id,
+            note=None,
+            created_by=current_teacher.id
+        )
+        db.add(credit_transaction)
 
     await db.commit()
     return {"deleted": True, "payment_id": payment_id}

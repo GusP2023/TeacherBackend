@@ -116,8 +116,8 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(
         to_encode,
-        settings.SECRET_KEY,
-        algorithm=settings.ALGORITHM
+        str(settings.SECRET_KEY),
+        algorithm=str(settings.ALGORITHM)
     )
     return encoded_jwt
 
@@ -142,8 +142,8 @@ def decode_token(token: str) -> dict:
     try:
         payload = jwt.decode(
             token,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM]
+            str(settings.SECRET_KEY),
+            algorithms=[str(settings.ALGORITHM)]
         )
         return payload
     except JWTError:
@@ -262,7 +262,7 @@ async def get_current_teacher(
     
     # Decodificar token
     payload = decode_token(token)
-    email: str = payload.get("sub")
+    email: str | None = payload.get("sub")
     
     if email is None:
         raise HTTPException(
@@ -365,7 +365,7 @@ async def get_current_teacher_ws(
     """
     # Decodificar token
     payload = decode_token(token)
-    email: str = payload.get("sub")
+    email: str | None = payload.get("sub")
 
     if email is None:
         raise Exception("Token inválido - sin email")

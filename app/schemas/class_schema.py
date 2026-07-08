@@ -19,7 +19,7 @@ ENUMS:
 - format: individual (1 alumno), group (varios alumnos)
 """
 from typing import Optional, List
-from datetime import date, datetime, time
+from datetime import date as dt_date, datetime, time as dt_time
 from pydantic import BaseModel, Field, ConfigDict
 
 # Importar enums desde los modelos
@@ -74,8 +74,8 @@ class ClassBase(BaseModel):
     - notes: notas opcionales (usado para título en eventos extra)
     """
     enrollment_id: int | None = Field(None, gt=0)  # Opcional para type='extra'
-    date: date
-    time: time
+    date: dt_date
+    time: dt_time
     duration: int = Field(default=45, gt=0, le=240)  # max 4 horas
     status: ClassStatus = ClassStatus.SCHEDULED
     type: ClassType = ClassType.REGULAR
@@ -142,8 +142,8 @@ class ClassUpdate(BaseModel):
     - NO se debe cambiar enrollment_id (sería otra clase diferente)
     - schedule_id tampoco se cambia (es referencia histórica)
     """
-    date: Optional[date]  = None
-    time: Optional[time] = None
+    date: Optional[dt_date]  = None
+    time: Optional[dt_time] = None
     duration: int | None = Field(None, gt=0, le=240)
     status: ClassStatus | None = None
     type: ClassType | None = None

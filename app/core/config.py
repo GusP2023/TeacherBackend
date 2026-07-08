@@ -59,7 +59,7 @@ class Settings(BaseSettings):
                     v += "&ssl=require"
                 else:
                     v += "?ssl=require"
-        return v
+        return v or ""
     
     # ========================================
     # SEGURIDAD Y AUTENTICACIÓN

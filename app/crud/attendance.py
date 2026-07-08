@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.models.attendance import Attendance, AttendanceStatus
 from app.models.enrollment import Enrollment
 from app.models.class_model import Class, ClassStatus
+from app.models.credit_transaction import CreditTransaction, CreditTransactionSource, CreditTransactionReferenceType
 from app.schemas.attendance import AttendanceCreate, AttendanceUpdate
 
 
@@ -84,19 +85,31 @@ async def create(db: AsyncSession, attendance_data: AttendanceCreate) -> Attenda
     # Marcar la clase como completada
     class_obj.status = ClassStatus.COMPLETED
 
-    # Si es license, otorgar crédito
+    # Si es license, otorgar crédito y registrar transacción
     if attendance_data.status == AttendanceStatus.LICENSE:
         result = await db.execute(
             select(Enrollment).where(Enrollment.id == class_obj.enrollment_id)
         )
         enrollment = result.scalar_one_or_none()
-        
+
         if enrollment:
             enrollment.credits += 1
-    
+
+            # Insertar transacción en el ledger
+            credit_transaction = CreditTransaction(
+                enrollment_id=enrollment.id,
+                amount=1,
+                source_type=CreditTransactionSource.LICENSE,
+                reference_type=CreditTransactionReferenceType.ATTENDANCE,
+                reference_id=attendance.id,
+                note=None,
+                created_by=None
+            )
+            db.add(credit_transaction)
+
     await db.commit()
     await db.refresh(attendance)
-    
+
     return attendance
 
 
@@ -131,25 +144,38 @@ async def delete(db: AsyncSession, attendance_id: int) -> bool:
     )
     class_obj = result.scalar_one_or_none()
 
-    # Si era license, quitar el crédito otorgado
+    # Si era license, quitar el crédito otorgado y registrar transacción
     if attendance.status == AttendanceStatus.LICENSE:
-        
+
         if class_obj:
             result = await db.execute(
                 select(Enrollment).where(Enrollment.id == class_obj.enrollment_id)
             )
             enrollment = result.scalar_one_or_none()
-            
+
             if enrollment:
                 if enrollment.credits > 0:
                     enrollment.credits -= 1
+
+                    # Insertar transacción en el ledger
+                    credit_transaction = CreditTransaction(
+                        enrollment_id=enrollment.id,
+                        amount=-1,
+                        source_type=CreditTransactionSource.LICENSE_REVERSAL,
+                        reference_type=CreditTransactionReferenceType.ATTENDANCE,
+                        reference_id=attendance.id,
+                        note=None,
+                        created_by=None
+                    )
+                    db.add(credit_transaction)
                 else:
                     raise ValueError("No se puede eliminar asistencia 'license' porque el alumno ya usó los créditos")
-    
+
     await db.delete(attendance)
-    class_obj.status = ClassStatus.SCHEDULED
+    if class_obj:
+        class_obj.status = ClassStatus.SCHEDULED
     await db.commit()
-    
+
     return True
 
 
@@ -208,11 +234,35 @@ async def update(
                     # Caso 1: Cambia A license (otorgar crédito)
                     if old_status != AttendanceStatus.LICENSE and new_status == AttendanceStatus.LICENSE:
                         enrollment.credits += 1
-                    
+
+                        # Insertar transacción en el ledger
+                        credit_transaction = CreditTransaction(
+                            enrollment_id=enrollment.id,
+                            amount=1,
+                            source_type=CreditTransactionSource.LICENSE,
+                            reference_type=CreditTransactionReferenceType.ATTENDANCE,
+                            reference_id=attendance.id,
+                            note=None,
+                            created_by=None
+                        )
+                        db.add(credit_transaction)
+
                     # Caso 2: Cambia DESDE license (quitar crédito)
                     elif old_status == AttendanceStatus.LICENSE and new_status != AttendanceStatus.LICENSE:
                         if enrollment.credits > 0:
                             enrollment.credits -= 1
+
+                            # Insertar transacción en el ledger
+                            credit_transaction = CreditTransaction(
+                                enrollment_id=enrollment.id,
+                                amount=-1,
+                                source_type=CreditTransactionSource.LICENSE_REVERSAL,
+                                reference_type=CreditTransactionReferenceType.ATTENDANCE,
+                                reference_id=attendance.id,
+                                note=None,
+                                created_by=None
+                            )
+                            db.add(credit_transaction)
                         else:
                             raise ValueError("No se puede cambiar de 'license' porque el alumno ya usó los créditos")
     

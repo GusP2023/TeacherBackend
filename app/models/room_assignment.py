@@ -2,8 +2,10 @@
 Modelo RoomAssignment - Asignación recurrente de sala a profesor.
 """
 
-from datetime import date, time
+from datetime import date as dt_date, time as dt_time
+# pyrefly: ignore [missing-import]
 from sqlalchemy import Integer, Date, Time, ForeignKey, Enum as SQLEnum, Index
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import TYPE_CHECKING
 
@@ -52,7 +54,7 @@ class RoomAssignment(Base, TimestampMixin):
         comment="Día de la semana recurrente"
     )
 
-    time: Mapped[time] = mapped_column(
+    time: Mapped[dt_time] = mapped_column(
         Time,
         nullable=False,
         comment="Hora de inicio de la asignación"
@@ -64,14 +66,14 @@ class RoomAssignment(Base, TimestampMixin):
         comment="Duración en minutos"
     )
 
-    valid_from: Mapped[date] = mapped_column(
+    valid_from: Mapped[dt_date] = mapped_column(
         Date,
         nullable=False,
         index=True,
         comment="Desde cuándo aplica esta asignación"
     )
 
-    valid_until: Mapped[date | None] = mapped_column(
+    valid_until: Mapped[dt_date | None] = mapped_column(
         Date,
         nullable=True,
         index=True,

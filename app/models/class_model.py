@@ -35,7 +35,7 @@ Formatos:
     group: N alumnos → cobra tariff_group × N
 """
 
-from datetime import date, time
+from datetime import date as dt_date, time as dt_time
 from sqlalchemy import Integer, Date, Time, ForeignKey, Enum as SQLEnum, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import Optional, TYPE_CHECKING
@@ -204,14 +204,14 @@ class Class(Base, TimestampMixin):
     # FECHA Y HORA ESPECÍFICA
     # ========================================
     
-    date: Mapped[date] = mapped_column(
+    date: Mapped[dt_date] = mapped_column(
         Date,
         nullable=False,
         index=True,
         comment="Fecha específica de la clase (ej: 2025-01-21)"
     )
     
-    time: Mapped[time] = mapped_column(
+    time: Mapped[dt_time] = mapped_column(
         Time,
         nullable=False,
         comment="Hora de inicio (heredado de Schedule o manual)"

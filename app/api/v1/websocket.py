@@ -129,7 +129,9 @@ async def pg_notify_listener():
             async with listener_engine.connect() as conn:
                 raw_conn = await conn.get_raw_connection()
                 # El objeto de conexión real de asyncpg
-                pg_conn = raw_conn.driver_connection
+                pg_conn = getattr(raw_conn, "driver_connection", None)
+                if not pg_conn:
+                    raise RuntimeError("No se pudo obtener la conexión de asyncpg")
                 
                 def notification_callback(connection, pid, channel, payload):
                     try:
@@ -142,7 +144,8 @@ async def pg_notify_listener():
                     except Exception as ex:
                         logger.error(f"[WebSocket] PG Listener: Error decodificando payload: {ex}")
                 
-                await pg_conn.add_listener("ws_notifications", notification_callback)
+                # Para evitar el error de pyright, ignoramos el tipo dinámico de add_listener
+                await pg_conn.add_listener("ws_notifications", notification_callback) # type: ignore
                 logger.info("[WebSocket] PG Listener: Escuchando canal 'ws_notifications' de PostgreSQL (Conexión Directa)...")
                 
                 # Mantener la conexión abierta
@@ -182,7 +185,7 @@ async def websocket_endpoint(
     try:
         # Decodificar token
         payload = decode_token(token)
-        email: str = payload.get("sub")
+        email: str | None = payload.get("sub")
         
         if not email:
             raise Exception("Token inválido - sin email")

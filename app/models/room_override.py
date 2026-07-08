@@ -2,8 +2,10 @@
 Modelo RoomOverride - Excepción puntual de sala para una fecha específica.
 """
 
-from datetime import date, time
+from datetime import date as dt_date, time as dt_time
+# pyrefly: ignore [missing-import]
 from sqlalchemy import Integer, Date, Time, ForeignKey, String, Index
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import TYPE_CHECKING
 
@@ -44,14 +46,14 @@ class RoomOverride(Base, TimestampMixin):
         comment="ID de la sala opcional para este override"
     )
 
-    date: Mapped[date] = mapped_column(
+    date: Mapped[dt_date] = mapped_column(
         Date,
         nullable=False,
         index=True,
         comment="Fecha exacta del override"
     )
 
-    time: Mapped[time] = mapped_column(
+    time: Mapped[dt_time] = mapped_column(
         Time,
         nullable=False,
         comment="Hora de inicio del override"

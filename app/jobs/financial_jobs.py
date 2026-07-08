@@ -76,7 +76,7 @@ def get_previous_month_range(today: date) -> tuple[date, date]:
 
 async def generate_billing_periods(
     db: AsyncSession,
-    target_date: date = None,
+    target_date: date | None = None,
     organization_id: int | None = None,
 ) -> dict:
     """
@@ -238,7 +238,7 @@ async def generate_billing_periods(
 # JOB 2: GENERAR PERSONNEL PAYMENTS
 # ============================================
 
-async def generate_personnel_payments(db: AsyncSession, target_date: date = None) -> dict:
+async def generate_personnel_payments(db: AsyncSession, target_date: date | None = None) -> dict:
     """
     Job mensual: Genera PersonnelPayment para todos los teachers activos.
     
@@ -304,8 +304,8 @@ async def generate_personnel_payments(db: AsyncSession, target_date: date = None
                 select(PersonnelPayment).where(
                     and_(
                         PersonnelPayment.teacher_id == teacher.id,
-                        PersonnelPayment.period_year == period_year,
-                        PersonnelPayment.period_month == period_month
+                        PersonnelPayment.period_from == first_day_prev,
+                        PersonnelPayment.period_to == last_day_prev
                     )
                 )
             )
@@ -379,8 +379,8 @@ async def generate_personnel_payments(db: AsyncSession, target_date: date = None
             # Crear PersonnelPayment
             personnel_payment = PersonnelPayment(
                 teacher_id=teacher.id,
-                period_year=period_year,
-                period_month=period_month,
+                period_from=first_day_prev,
+                period_to=last_day_prev,
                 payment_mode_snapshot=teacher.payment_mode,
                 tariff_individual_snapshot=teacher.tariff_individual,
                 tariff_group_snapshot=teacher.tariff_group,

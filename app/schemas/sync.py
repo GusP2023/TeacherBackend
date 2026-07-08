@@ -58,7 +58,7 @@ class InitialSyncRequest(BaseModel):
         ge=2020,
         le=2050,
         description="Año a sincronizar (ej: 2025)",
-        example=2025,
+        json_schema_extra={"example": 2025},
     )
 
 
@@ -79,11 +79,11 @@ class SyncMetadata(BaseModel):
     sync_timestamp: datetime = Field(
         ...,
         description="Timestamp de la sincronización (ISO 8601 con timezone)",
-        example="2025-01-27T12:00:00Z",
+        json_schema_extra={"example": "2025-01-27T12:00:00Z"},
     )
 
     total_records: int = Field(
-        ..., ge=0, description="Número total de registros en esta sync", example=1234
+        ..., ge=0, description="Número total de registros en esta sync", json_schema_extra={"example": 1234}
     )
 
 

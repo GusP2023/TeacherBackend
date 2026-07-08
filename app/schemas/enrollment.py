@@ -88,6 +88,10 @@ class EnrollmentUpdate(BaseModel):
     status: EnrollmentStatus | None = None
     level: EnrollmentLevel | None = None
     credits: int | None = Field(None, ge=0)
+    credits_note: str | None = Field(
+        None,
+        description="Nota explicativa para ajuste manual de créditos"
+    )
     suspended_until: date | None = None  # Hasta qué fecha está suspendido
     withdrawn_date: date | None = None    # Fecha de retiro definitivo
     format: ClassFormat | None = None     # Cambiar formato de clases
@@ -121,14 +125,18 @@ class EnrollmentUpdate(BaseModel):
 class EnrollmentSuspendRequest(BaseModel):
     """
     Para SUSPENDER una inscripción (POST /enrollments/{id}/suspend)
-    
+
     Acciones automáticas:
     - Cambia status → 'suspended'
     - Guarda suspended_at con la fecha actual
     - ELIMINA todas las clases futuras (scheduled)
     """
+    suspended_at: date = Field(
+        ...,
+        description="Fecha desde cuándo está suspendido"
+    )
     reason: Optional[str] = Field(
-        None, 
+        None,
         max_length=255,
         description="Motivo de la suspensión (opcional)"
     )

@@ -236,7 +236,7 @@ async def startup_event():
         from app.core.database import engine
         from app.models.job_run_log import JobRunLog
         async with engine.begin() as conn:
-            await conn.run_sync(JobRunLog.__table__.create, checkfirst=True)
+            await conn.run_sync(JobRunLog.__table__.create, checkfirst=True) # type: ignore
         print(">> Tabla JobRunLog verificada/creada")
     except Exception as e:
         print(f">> Creación tabla JobRunLog fallida: {e} — se creará con la primera query")

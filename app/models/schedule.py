@@ -29,7 +29,7 @@ Cambio de horario:
     Así se mantiene el histórico completo.
 """
 
-from datetime import date, time
+from datetime import date as dt_date, time as dt_time
 from sqlalchemy import Integer, Date, Time, Boolean, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List, Optional, TYPE_CHECKING
@@ -164,7 +164,7 @@ class Schedule(Base, TimestampMixin):
         comment="Día de la semana (monday, tuesday, etc)"
     )
     
-    time: Mapped[time] = mapped_column(
+    time: Mapped[dt_time] = mapped_column(
         Time,
         nullable=False,
         comment="Hora de inicio de la clase (ej: 16:00)"
@@ -181,14 +181,14 @@ class Schedule(Base, TimestampMixin):
     # VIGENCIA DEL HORARIO
     # ========================================
     
-    valid_from: Mapped[date] = mapped_column(
+    valid_from: Mapped[dt_date] = mapped_column(
         Date,
         nullable=False,
         index=True,
         comment="Desde cuándo aplica este horario"
     )
     
-    valid_until: Mapped[date | None] = mapped_column(
+    valid_until: Mapped[Optional[dt_date]] = mapped_column(
         Date,
         nullable=True,
         index=True,

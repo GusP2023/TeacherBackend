@@ -111,6 +111,12 @@ from .payment import (
     PaymentMethod
 )
 
+from .credit_transaction import (
+    CreditTransaction,
+    CreditTransactionSource,
+    CreditTransactionReferenceType
+)
+
 from .personnel_payment import (
     PersonnelPayment,
     PersonnelPaymentStatus
@@ -156,6 +162,9 @@ __all__ = [
     "Payment",
     "PaymentConcept",
     "PaymentMethod",
+    "CreditTransaction",
+    "CreditTransactionSource",
+    "CreditTransactionReferenceType",
     "PersonnelPayment",
     "PersonnelPaymentStatus",
     "Expense",

@@ -5,7 +5,7 @@ CRUD operations for Schedule model
 import logging
 from datetime import date, time
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, update, and_, or_, func, extract
+from sqlalchemy import select, delete, update as sql_update, and_, or_, func, extract
 from sqlalchemy.orm import selectinload
 from app.models.schedule import Schedule, DayOfWeek
 from app.models.attendance import Attendance
@@ -14,7 +14,7 @@ from app.models.class_model import ClassFormat, Class, ClassType, ClassStatus
 from app.models.student import Student
 from app.schemas.schedule import ScheduleCreate, ScheduleUpdate
 from app.core.config import settings
-from app.jobs.class_generator import generate_classes_for_enrollment
+from app.jobs.class_generator import generate_classes_for_enrollment, _generate_classes_for_schedule
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ async def check_schedule_conflict(
     db: AsyncSession,
     teacher_id: int,
     day: str,
-    time: str,
+    time: time,
     duration: int,
     exclude_schedule_id: int | None = None,
     enrollment_id: int | None = None
@@ -396,7 +396,7 @@ async def update(
 
     if room_changed:
         await db.execute(
-            update(Class)
+            sql_update(Class)
             .where(
                 Class.schedule_id == schedule_id,
                 Class.date >= date.today(),

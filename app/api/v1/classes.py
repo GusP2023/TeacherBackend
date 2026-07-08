@@ -2,7 +2,9 @@
 Classes endpoints - CRUD de clases específicas + recuperaciones
 """
 
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import date
 
@@ -176,7 +178,11 @@ async def create_recovery_class(
         400: Si no hay créditos disponibles
         400: Si el enrollment no existe o no pertenece al profesor
     """
-    # Validar que el enrollment existe y pertenece al profesor
+    if not class_data.enrollment_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="enrollment_id es obligatorio para crear recuperaciones"
+        )
     enrollment_obj = await enrollment.get(db, class_data.enrollment_id)
     
     if not enrollment_obj:
@@ -208,6 +214,8 @@ async def create_recovery_class(
     # Crear la recuperación (el CRUD valida créditos y descuenta automáticamente)
     try:
         new_recovery = await class_crud.create_recovery(db, class_data)
+        if not new_recovery:
+            raise ValueError("No se pudo crear la recuperación")
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -319,6 +327,8 @@ async def update_class(
     # Actualizar (el CRUD bloquea cambio de 'type')
     try:
         updated_class = await class_crud.update(db, class_id, class_data)
+        if not updated_class:
+            raise ValueError("No se encontró la clase para actualizar")
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -379,7 +389,8 @@ async def cancel_class(
     
     # Cancelar
     cancelled_class = await class_crud.cancel(db, class_id)
-    await notify_data_change(cancelled_class.teacher_id, "class", "cancel", cancelled_class.id)
+    if cancelled_class:
+        await notify_data_change(cancelled_class.teacher_id, "class", "cancel", cancelled_class.id)
     
     return cancelled_class
 

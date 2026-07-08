@@ -20,10 +20,10 @@ class TeacherBase(BaseModel):
     """
     email: EmailStr
     name: str = Field(..., min_length=1, max_length=100)
-    phone: str | None = Field(None, max_length=20)
+    phone: str | None = Field(default=None, max_length=20)
     birthdate: date | None = None
-    bio: str | None = Field(None, max_length=500)
-    avatar_url: str | None = Field(None, max_length=500)
+    bio: str | None = Field(default=None, max_length=500)
+    avatar_url: str | None = Field(default=None, max_length=500)
     tariff_individual: Decimal = Field(default=Decimal('50.00'), gt=0, decimal_places=2)
     tariff_group: Decimal = Field(default=Decimal('30.00'), gt=0, decimal_places=2)
 
@@ -42,11 +42,11 @@ class TeacherUpdate(BaseModel):
     Todos los campos son opcionales
     """
     email: EmailStr | None = None
-    name: str | None = Field(None, min_length=1, max_length=100)
-    phone: str | None = Field(None, max_length=20)
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    phone: str | None = Field(default=None, max_length=20)
     birthdate: date | None = None
-    bio: str | None = Field(None, max_length=500)
-    avatar_url: str | None = Field(None, max_length=500)
+    bio: str | None = Field(default=None, max_length=500)
+    avatar_url: str | None = Field(default=None, max_length=500)
     password: str | None = Field(None, min_length=8, max_length=100)
     tariff_individual: Decimal | None = Field(None, gt=0, decimal_places=2)
     tariff_group: Decimal | None = Field(None, gt=0, decimal_places=2)

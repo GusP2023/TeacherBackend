@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from app.models.teacher import Teacher
 
 
 async def calculate_teacher_payment(

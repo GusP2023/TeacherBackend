@@ -89,7 +89,7 @@ async def generate_classes_for_enrollment(
     db: AsyncSession,
     enrollment_id: int,
     months_ahead: int = 2,
-    from_date: date = None
+    from_date: date | None = None
 ) -> dict:
     """
     Genera clases para una inscripción específica.
@@ -308,7 +308,7 @@ async def _generate_classes_for_schedule(
 # JOB MENSUAL AUTOMÁTICO
 # ============================================
 
-async def generate_monthly_classes(db: AsyncSession, from_date: date = None) -> dict:
+async def generate_monthly_classes(db: AsyncSession, from_date: date | None = None) -> dict:
     """
     Job mensual: Genera clases para todos los enrollments activos.
 

@@ -16,7 +16,7 @@ IMPORTANTE:
 - valid_from/valid_until: período de vigencia del horario
 """
 from typing import Optional
-from datetime import date, datetime, time
+from datetime import date as dt_date, datetime, time as dt_time
 from pydantic import BaseModel, Field, ConfigDict
 
 # Importar enum desde los modelos
@@ -37,10 +37,10 @@ class ScheduleBase(BaseModel):
     """
     enrollment_id: int = Field(..., gt=0)
     day: DayOfWeek
-    time: time  # Hora sin fecha (ej: 16:00:00)
+    time: dt_time  # Hora sin fecha (ej: 16:00:00)
     duration: int = Field(default=45, gt=0, le=240)  # le=240 → max 4 horas
-    valid_from: date
-    valid_until: date | None = None  # None = indefinido
+    valid_from: dt_date
+    valid_until: dt_date | None = None  # None = indefinido
 
 
 class ScheduleCreate(ScheduleBase):
@@ -80,10 +80,10 @@ class ScheduleUpdate(BaseModel):
     NO se actualizan automáticamente. Se deben cancelar y regenerar.
     """
     day: DayOfWeek | None = None
-    time: Optional[time] = None
+    time: Optional[dt_time] = None
     duration: int | None = Field(None, gt=0, le=240)
-    valid_from: date | None = None
-    valid_until: date | None = None
+    valid_from: dt_date | None = None
+    valid_until: dt_date | None = None
     active: bool | None = None
     room_id: int | None = None
 
@@ -135,8 +135,8 @@ class ChangeScheduleRequest(BaseModel):
     Ejemplo: Cambiar de Martes 16:00 a Jueves 18:00 desde el 15-Mar
     """
     new_day: DayOfWeek
-    new_time: time
-    change_from: date
+    new_time: dt_time
+    change_from: dt_date
 
 
 class ChangeScheduleResponse(BaseModel):
@@ -151,7 +151,7 @@ class ChangeScheduleResponse(BaseModel):
 
 
 class ReactivateScheduleRequest(BaseModel):
-    valid_from: date
+    valid_from: dt_date
 
 
 class ReactivateScheduleResponse(BaseModel):
@@ -163,7 +163,7 @@ class ReactivateScheduleResponse(BaseModel):
 
 class RemoveScheduleRequest(BaseModel):
     """Request para eliminar un horario con fecha"""
-    remove_from: date = Field(
+    remove_from: dt_date = Field(
         ...,
         description="Fecha desde la que se elimina el horario (inclusive). Las clases desde esta fecha serán eliminadas."
     )
@@ -180,7 +180,7 @@ class RemoveScheduleResponse(BaseModel):
     """Response de eliminación de horario"""
     schedule_id: int
     classes_deleted: int
-    valid_until: date
+    valid_until: dt_date
     message: str
     
     class Config:

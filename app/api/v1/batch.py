@@ -34,6 +34,9 @@ async def process_batch(
     processor = BatchProcessor(db, current_teacher.id)
     results = []
     
+    mock_commit: any = None # type: ignore
+    original_commit: any = None # type: ignore
+    
     try:
         # Iniciar transacción nested si es necesario, pero FastAPI/SQLAlchemy
         # manejan la sesión. Si falla algo, hacemos rollback manual y re-raise o return error.
@@ -123,7 +126,7 @@ async def process_batch(
             pass
             
         # Reemplazar commit temporalmente
-        db.commit = mock_commit
+        db.commit = mock_commit  # type: ignore
         
         # Iniciar transacción si no está iniciada (FastAPI suele iniciarla)
         # Pero aseguramos con un bloque try/except general.

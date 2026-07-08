@@ -1,10 +1,13 @@
 """
 Students endpoints - CRUD completo para alumnos
 """
-
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+# pyrefly: ignore [missing-import]
 from sqlalchemy import select
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
@@ -316,6 +319,8 @@ async def update_student(
     
     # Actualizar
     updated_student = await student.update(db, student_id, student_data)
+    if not updated_student:
+        raise ValueError("No se encontró el alumno para actualizar")
     await notify_data_change(updated_student.teacher_id, "student", "update", updated_student.id)
     
     return updated_student

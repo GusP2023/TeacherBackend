@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from .fee_discount import FeeDiscount
     from .billing_period import BillingPeriod
     from .payment import Payment
+    from .credit_transaction import CreditTransaction
 
 
 class EnrollmentStatus(str, enum.Enum):
@@ -333,6 +334,12 @@ class Enrollment(Base, TimestampMixin):
     )
 
     payments: Mapped[List["Payment"]] = relationship(
+        back_populates="enrollment",
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    credit_transactions: Mapped[List["CreditTransaction"]] = relationship(
         back_populates="enrollment",
         cascade="all, delete-orphan",
         lazy="noload"

@@ -12,6 +12,7 @@ from app.models.schedule import Schedule
 from app.models.class_model import Class, ClassStatus, ClassType
 from app.models.student import Student
 from app.models.attendance import Attendance
+from app.models.credit_transaction import CreditTransaction, CreditTransactionSource
 from app.schemas.enrollment import EnrollmentCreate, EnrollmentUpdate
 
 
@@ -64,25 +65,57 @@ async def create(db: AsyncSession, enrollment_data: EnrollmentCreate) -> Enrollm
 async def update(
     db: AsyncSession,
     enrollment_id: int,
-    enrollment_data: EnrollmentUpdate
+    enrollment_data: EnrollmentUpdate,
+    teacher_id: Optional[int] = None
 ) -> Enrollment | None:
-    """Actualizar una inscripción existente"""
+    """
+    Actualizar una inscripción existente
+
+    Si se modifica credits, calcula el delta e inserta transacción en el ledger.
+    """
     result = await db.execute(
         select(Enrollment).where(Enrollment.id == enrollment_id)
     )
     enrollment = result.scalar_one_or_none()
-    
+
     if not enrollment:
         return None
-    
+
     update_data = enrollment_data.model_dump(exclude_unset=True)
-    
+
+    # Manejar cambio de créditos con ledger
+    if 'credits' in update_data:
+        old_credits = enrollment.credits
+        new_credits = update_data['credits']
+        delta = new_credits - old_credits
+
+        if delta != 0:
+            # Actualizar créditos
+            enrollment.credits = new_credits
+
+            # Insertar transacción en el ledger
+            credit_transaction = CreditTransaction(
+                enrollment_id=enrollment.id,
+                amount=delta,
+                source_type=CreditTransactionSource.MANUAL_ADJUSTMENT,
+                reference_type=None,
+                reference_id=None,
+                note=update_data.get('credits_note'),
+                created_by=teacher_id
+            )
+            db.add(credit_transaction)
+
+            # Remover credits_note de update_data para no intentar setearlo en enrollment
+            update_data.pop('credits_note', None)
+
+    # Aplicar otros cambios
     for field, value in update_data.items():
-        setattr(enrollment, field, value)
-    
+        if field != 'credits':  # credits ya fue manejado arriba
+            setattr(enrollment, field, value)
+
     await db.commit()
     await db.refresh(enrollment)
-    
+
     return enrollment
 
 

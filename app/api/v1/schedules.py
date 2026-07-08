@@ -1,9 +1,11 @@
 """
 Schedules endpoints - CRUD de horarios recurrentes (templates)
 """
-
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel
 from datetime import date, time as time_module
 from typing import Optional
@@ -460,6 +462,8 @@ async def update_schedule(
     # Actualizar (con validación de conflictos si cambia día/hora/duración)
     try:
         updated_schedule = await schedule.update(db, schedule_id, schedule_data)
+        if not updated_schedule:
+            raise ValueError("No se pudo actualizar el horario")
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

@@ -8,19 +8,26 @@ Endpoints completos para gestionar inscripciones incluyendo:
 - Retiro definitivo
 """
 
+# pyrefly: ignore [missing-import]
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+# pyrefly: ignore [missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import date
 from typing import Optional
 import re
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.core.security import get_current_teacher
 from app.crud import enrollment, student, instrument
 from app.models.teacher import Teacher
+from app.models.enrollment import Enrollment
 from app.api.v1.websocket import notify_data_change
+# pyrefly: ignore [missing-import]
 from sqlalchemy import select, and_, or_
+# pyrefly: ignore [missing-import]
+from sqlalchemy.orm import joinedload
 from app.schemas.enrollment import (
     EnrollmentCreate,
     EnrollmentUpdate,
@@ -30,6 +37,9 @@ from app.schemas.enrollment import (
     EnrollmentSuspendResponse,
     EnrollmentReactivateResponse,
 )
+from app.schemas.credit_transaction import CreditTransactionResponse, LicenseRecoveryStatus
+from app.models.attendance import AttendanceStatus
+from app.models.credit_transaction import CreditTransactionSource
 from app.schemas.suspension import (
     SuspendEnrollmentRequest,
     ReactivateEnrollmentRequest,
@@ -37,9 +47,29 @@ from app.schemas.suspension import (
 from app.jobs.class_generator import generate_classes_for_enrollment
 from app.models.schedule import Schedule
 from app.models.enrollment import EnrollmentStatus
+# pyrefly: ignore [missing-import]
 from sqlalchemy import update as sa_update
 
 router = APIRouter()
+
+# Helper function to enrich enrollment with computed fields
+async def enrich_enrollment(db: AsyncSession, enrollment_obj: Enrollment | None) -> Enrollment | None:
+    """Add teacher_name and instrument_name as computed fields to the enrollment object"""
+    if enrollment_obj is None:
+        return None
+
+    result = await db.execute(
+        select(Enrollment)
+        .options(joinedload(Enrollment.teacher), joinedload(Enrollment.instrument))
+        .where(Enrollment.id == enrollment_obj.id)
+    )
+    enriched = result.scalar_one_or_none()
+    if enriched:
+        # Usar setattr para agregar atributos dinámicamente (no están en el modelo pero están en el schema)
+        setattr(enriched, 'teacher_name', enriched.teacher.name if enriched.teacher else None)
+        setattr(enriched, 'instrument_name', enriched.instrument.name if enriched.instrument else None)
+        return enriched
+    return enrollment_obj
 
 
 # ========================================
@@ -78,15 +108,14 @@ async def list_enrollments(
         skip=skip,
         limit=limit
     )
+    # Enriquecer con teacher_name e instrument_name para la respuesta
+    enriched_enrollments = []
     for e in enrollments:
-        if not hasattr(e, 'teacher_name') or e.teacher_name is None:
-            t = await db.get(Teacher, e.teacher_id)
-            e.teacher_name = t.name if t else None
-        if not hasattr(e, 'instrument_name') or e.instrument_name is None:
-            i = await instrument.get(db, e.instrument_id)
-            e.instrument_name = i.name if i else None
+        enriched = await enrich_enrollment(db, e)
+        if enriched:
+            enriched_enrollments.append(enriched)
 
-    return enrollments
+    return enriched_enrollments
 
 
 @router.post("/", response_model=EnrollmentResponse, status_code=status.HTTP_201_CREATED)
@@ -191,15 +220,13 @@ async def get_student_enrollments(
     enrollments = await enrollment.get_by_student(db, student_id)
 
     # Enriquecer con teacher_name e instrument_name
+    enriched_enrollments = []
     for e in enrollments:
-        if not hasattr(e, 'teacher_name') or e.teacher_name is None:
-            t = await db.get(Teacher, e.teacher_id)
-            e.teacher_name = t.name if t else None
-        if not hasattr(e, 'instrument_name') or e.instrument_name is None:
-            i = await instrument.get(db, e.instrument_id)
-            e.instrument_name = i.name if i else None
+        enriched = await enrich_enrollment(db, e)
+        if enriched:
+            enriched_enrollments.append(enriched)
 
-    return enrollments
+    return enriched_enrollments
 
 
 @router.get("/{enrollment_id}", response_model=EnrollmentResponse)
@@ -230,15 +257,14 @@ async def get_enrollment(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="No tienes permiso para ver esta inscripción"
             )
-    
-    if not hasattr(enrollment_obj, 'teacher_name') or enrollment_obj.teacher_name is None:
-        t = await db.get(Teacher, enrollment_obj.teacher_id)
-        enrollment_obj.teacher_name = t.name if t else None
-    if not hasattr(enrollment_obj, 'instrument_name') or enrollment_obj.instrument_name is None:
-        i = await instrument.get(db, enrollment_obj.instrument_id)
-        enrollment_obj.instrument_name = i.name if i else None
-    
-    return enrollment_obj
+
+    enriched = await enrich_enrollment(db, enrollment_obj)
+    if enriched:
+        return enriched
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Inscripción {enrollment_id} no encontrada"
+    )
 
 
 @router.patch("/{enrollment_id}", response_model=EnrollmentResponse)
@@ -318,18 +344,13 @@ async def update_enrollment(
     old_enrolled_date = enrollment_obj.enrolled_date
     new_enrolled_date = enrollment_data.enrolled_date  # None si no cambió
 
-    updated_enrollment = await enrollment.update(db, enrollment_id, enrollment_data)
+    updated_enrollment = await enrollment.update(db, enrollment_id, enrollment_data, current_teacher.id)
 
     # Enriquecer con teacher_name e instrument_name para la respuesta
     if updated_enrollment is not None:
-        if not hasattr(updated_enrollment, 'teacher_name') or updated_enrollment.teacher_name is None:
-            teacher_obj = await db.get(Teacher, updated_enrollment.teacher_id)
-            if teacher_obj:
-                updated_enrollment.teacher_name = teacher_obj.name
-        if not hasattr(updated_enrollment, 'instrument_name') or updated_enrollment.instrument_name is None:
-            instrument_obj = await instrument.get(db, updated_enrollment.instrument_id)
-            if instrument_obj:
-                updated_enrollment.instrument_name = instrument_obj.name
+        enriched = await enrich_enrollment(db, updated_enrollment)
+        if enriched:
+            updated_enrollment = enriched
 
     # Si se reactivó manualmente vía PATCH:
     # 1. Reactivar schedules (asumimos que quiere recuperar su horario anterior)
@@ -340,6 +361,8 @@ async def update_enrollment(
         # 1. Reactivar sólo los schedules que estaban vigentes al momento de la suspensión
         #    Evitar reactivar schedules históricos anteriores que sólo existen para historial.
         today = date.today()
+        # pyrefly: ignore [missing-import]
+        from sqlalchemy import and_
         await db.execute(
             sa_update(Schedule)
             .where(
@@ -374,6 +397,7 @@ async def update_enrollment(
 
     # Si cambió enrolled_date: reconciliar clases
     elif new_enrolled_date and new_enrolled_date != old_enrolled_date:
+        # pyrefly: ignore [missing-import]
         from sqlalchemy import delete as sa_delete, and_, select
         from app.models.class_model import Class, ClassStatus, ClassType
         from app.models.attendance import Attendance
@@ -424,7 +448,8 @@ async def update_enrollment(
         print(f"✅ [UpdateEnrollment] Clases generadas tras cambio de fecha: {gen_result.get('created', 0)}")
         await db.commit()
 
-    await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", updated_enrollment.id)
+    if updated_enrollment:
+        await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", updated_enrollment.id)
     return updated_enrollment
 
 
@@ -497,7 +522,6 @@ async def suspend_enrollment_put(
     """
     from app.crud.enrollment import validate_suspension, suspend_enrollment as suspend_enroll_crud
     from app.models.enrollment import Enrollment, EnrollmentStatus
-    from sqlalchemy import select, and_
 
     # Verificar que enrollment existe
     enroll_result = await db.execute(
@@ -559,9 +583,20 @@ async def suspend_enrollment_put(
             detail=f"No se puede suspender. Las siguientes clases tienen asistencia marcada: {dates_str}"
         )
 
+    if conflicting_dates:
+        # Formatear fechas para mensaje
+        dates_str = ", ".join([d.strftime('%d-%b') for d in conflicting_dates[:3]])
+        if len(conflicting_dates) > 3:
+            dates_str += f" (y {len(conflicting_dates) - 3} más)"
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"No se puede suspender. Las siguientes clases tienen asistencia marcada: {dates_str}"
+        )
+
     # Ejecutar suspensión
     try:
-        result = await suspend_enroll_crud(
+        result = await enrollment.suspend_enrollment(
             db,
             enrollment_id,
             data.suspended_at,
@@ -569,14 +604,20 @@ async def suspend_enrollment_put(
             data.reason
         )
 
-        await notify_data_change(result.teacher_id, "enrollment", "suspend", result.id)
-        return {
-            "id": result.id,
-            "status": result.status.value,
-            "suspended_at": result.suspended_at,
-            "suspended_until": result.suspended_until,
-            "message": "Enrollment suspendido exitosamente"
-        }
+        if result:
+            await notify_data_change(result.teacher_id, "enrollment", "suspend", result.id)
+            return {
+                "id": result.id,
+                "status": result.status.value,
+                "suspended_at": result.suspended_at,
+                "suspended_until": result.suspended_until,
+                "message": "Enrollment suspendido exitosamente"
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error al suspender enrollment: resultado nulo"
+            )
 
     except Exception as e:
         await db.rollback()
@@ -587,7 +628,7 @@ async def suspend_enrollment_put(
 
 
 @router.post("/{enrollment_id}/suspend", response_model=EnrollmentSuspendResponse)
-async def suspend_enrollment(
+async def suspend_enrollment_endpoint(
     enrollment_id: int,
     request: EnrollmentSuspendRequest,
     db: AsyncSession = Depends(get_db),
@@ -595,7 +636,7 @@ async def suspend_enrollment(
 ):
     """
     Suspender una inscripción temporalmente.
-    
+
     Acciones automáticas:
     - Cambia status → 'suspended'
     - Guarda fecha de suspensión y motivo (opcional)
@@ -675,6 +716,7 @@ async def reactivate_enrollment_put(
     from app.crud.schedule import check_schedule_availability_dates
     from app.models.enrollment import Enrollment, EnrollmentStatus
     from app.models.class_model import Class
+    # pyrefly: ignore [missing-import]
     from sqlalchemy import select, and_
 
     # Verificar enrollment
@@ -804,6 +846,11 @@ async def reactivate_enrollment_put(
 
         # ÉXITO - Enrollment fue reactivado
         reactivated_enrollment = result.get("enrollment")
+        if not reactivated_enrollment:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="No se devolvió el enrollment reactivado"
+            )
         await notify_data_change(reactivated_enrollment.teacher_id, "enrollment", "reactivate", reactivated_enrollment.id)
         return {
             "id": reactivated_enrollment.id,
@@ -828,7 +875,7 @@ async def reactivate_enrollment_put(
 @router.post("/{enrollment_id}/reactivate", response_model=EnrollmentReactivateResponse)
 async def reactivate_enrollment(
     enrollment_id: int,
-    request: EnrollmentReactivateRequest = EnrollmentReactivateRequest(),
+    request: EnrollmentReactivateRequest,
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
@@ -1055,7 +1102,8 @@ async def add_partial_recovery(
         )
 
     updated_enrollment = await enrollment.get(db, enrollment_id)
-    await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", enrollment_id)
+    if updated_enrollment:
+        await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", enrollment_id)
     return updated_enrollment
 
 
@@ -1087,6 +1135,13 @@ async def delete_partial_recovery(
                 detail="No tienes permiso para modificar esta inscripción"
             )
 
+    # Asegurarse que enrollment_obj no es None para el type checker
+    if enrollment_obj is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Inscripción {enrollment_id} no encontrada"
+        )
+
     current_sessions = enrollment_obj.partial_sessions or []
     if not current_sessions:
         raise HTTPException(
@@ -1107,7 +1162,8 @@ async def delete_partial_recovery(
         )
 
     updated_enrollment = await enrollment.get(db, enrollment_id)
-    await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", enrollment_id)
+    if updated_enrollment:
+        await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", enrollment_id)
     return updated_enrollment
 
 
@@ -1138,6 +1194,13 @@ async def clear_partial_recoveries(
                 detail="No tienes permiso para modificar esta inscripción"
             )
 
+    # Asegurarse que enrollment_obj no es None para el type checker
+    if enrollment_obj is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Inscripción {enrollment_id} no encontrada"
+        )
+
     success = await enrollment.clear_partial_sessions(db, enrollment_id)
     if not success:
         raise HTTPException(
@@ -1146,7 +1209,8 @@ async def clear_partial_recoveries(
         )
 
     updated_enrollment = await enrollment.get(db, enrollment_id)
-    await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", enrollment_id)
+    if updated_enrollment:
+        await notify_data_change(updated_enrollment.teacher_id, "enrollment", "update", enrollment_id)
     return updated_enrollment
 
 
@@ -1195,5 +1259,217 @@ async def check_schedule_availability(
         current_teacher.id,
         enrollment_id
     )
-    
+
     return conflicts
+
+
+# ========================================
+# CRÉDITOS - LEDGER DE TRANSACCIONES
+# ========================================
+
+@router.get("/{enrollment_id}/credit-transactions", response_model=list[CreditTransactionResponse])
+async def get_credit_transactions(
+    enrollment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """
+    Obtener el historial de transacciones de créditos de una inscripción
+
+    Devuelve todas las transacciones ordenadas por created_at DESC (más recientes primero).
+    Útil para el tab "historial" de StudentDrawer (admin) y FinanzasScreen (mobile).
+
+    Args:
+        enrollment_id: ID de la inscripción
+        db: Sesión de base de datos
+        current_teacher: Profesor autenticado (desde JWT)
+
+    Returns:
+        Lista de transacciones de créditos
+
+    Raises:
+        404: Si la inscripción no existe
+        403: Si la inscripción no pertenece al profesor
+    """
+    from app.models.credit_transaction import CreditTransaction
+
+    # Verificar que la inscripción existe y pertenece al profesor
+    enrollment_obj = await enrollment.get(db, enrollment_id)
+
+    if not enrollment_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Inscripción {enrollment_id} no encontrada"
+        )
+
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta inscripción"
+            )
+
+    # Obtener transacciones ordenadas por created_at DESC
+    result = await db.execute(
+        select(CreditTransaction)
+        .where(CreditTransaction.enrollment_id == enrollment_id)
+        .order_by(CreditTransaction.created_at.desc())
+    )
+    transactions = result.scalars().all()
+
+    return transactions
+
+
+@router.get("/{enrollment_id}/license-recovery-status", response_model=list[LicenseRecoveryStatus])
+async def get_license_recovery_status(
+    enrollment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher)
+):
+    """
+    Obtener el estado de recuperación de licencias de una inscripción
+
+    Para cada asistencia tipo 'license' del enrollment, determina si está recuperada o pendiente.
+    Usa FIFO pero SOLO sobre transacciones source_type='license' vs source_type='recovery_class'.
+    EXCLUYENDO créditos que vinieron de 'clase_suelta_payment' o 'manual_adjustment' del conteo
+    de "licencias disponibles para recuperar".
+
+    Esto corrige el bug donde el cliente infería FIFO global, marcando como recuperadas
+    licencias que en realidad se cubrieron con créditos comprados.
+
+    IMPORTANTE: Esta imputación sigue siendo FIFO (no hay vínculo explícito 1 a 1 elegido por el usuario),
+    pero ahora corregido para no confundir orígenes de créditos.
+
+    Args:
+        enrollment_id: ID de la inscripción
+        db: Sesión de base de datos
+        current_teacher: Profesor autenticado (desde JWT)
+
+    Returns:
+        Lista de estados de licencias (cada una con attendance_id, fecha, estado y recovery_class_id si aplica)
+
+    Raises:
+        404: Si la inscripción no existe
+        403: Si la inscripción no pertenece al profesor
+    """
+    from app.models.credit_transaction import CreditTransaction
+    from app.models.attendance import Attendance
+    from app.models.class_model import Class
+
+    # Verificar que la inscripción existe y pertenece al profesor
+    enrollment_obj = await enrollment.get(db, enrollment_id)
+
+    if not enrollment_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Inscripción {enrollment_id} no encontrada"
+        )
+
+    if current_teacher.organization_id:
+        enrollment_teacher = await db.get(Teacher, enrollment_obj.teacher_id)
+        if not enrollment_teacher or enrollment_teacher.organization_id != current_teacher.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta inscripción"
+            )
+    else:
+        if enrollment_obj.teacher_id != current_teacher.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para ver esta inscripción"
+            )
+
+    # 1. Obtener todas las asistencias tipo 'license' del enrollment
+    license_attendances_result = await db.execute(
+        select(Attendance, Class)
+        .join(Class, Attendance.class_id == Class.id)
+        .where(
+            Class.enrollment_id == enrollment_id,
+            Attendance.status == AttendanceStatus.LICENSE
+        )
+        .order_by(Class.date, Class.time)
+    )
+    license_attendances = license_attendances_result.all()
+
+    # 2. Obtener todas las transacciones de licencias (source_type='license')
+    license_transactions_result = await db.execute(
+        select(CreditTransaction)
+        .where(
+            CreditTransaction.enrollment_id == enrollment_id,
+            CreditTransaction.source_type == CreditTransactionSource.LICENSE
+        )
+        .order_by(CreditTransaction.created_at.asc())
+    )
+    license_transactions = license_transactions_result.scalars().all()
+
+    # 3. Obtener todas las transacciones de recuperaciones (source_type='recovery_class')
+    recovery_transactions_result = await db.execute(
+        select(CreditTransaction)
+        .where(
+            CreditTransaction.enrollment_id == enrollment_id,
+            CreditTransaction.source_type == CreditTransactionSource.RECOVERY_CLASS
+        )
+        .order_by(CreditTransaction.created_at.asc())
+    )
+    recovery_transactions = recovery_transactions_result.scalars().all()
+
+    # 4. FIFO: Matchear licencias con recuperaciones
+    # Crear un set de license transaction IDs que fueron consumidas
+    consumed_license_tx_ids = set()
+    license_tx_queue = list(license_transactions)  # Copia para consumir
+
+    for recovery_tx in recovery_transactions:
+        if license_tx_queue:
+            consumed_license_tx = license_tx_queue.pop(0)  # FIFO: tomar la más antigua
+            consumed_license_tx_ids.add(consumed_license_tx.id)
+
+    # 5. Para cada asistencia de licencia, determinar su estado
+    license_status_list = []
+
+    for attendance, class_obj in license_attendances:
+        # Buscar la transacción de licencia correspondiente a esta asistencia
+        license_tx = next(
+            (tx for tx in license_transactions if tx.reference_id == attendance.id),
+            None
+        )
+
+        if license_tx:
+            is_recovered = license_tx.id in consumed_license_tx_ids
+
+            # Si está recuperada, encontrar el recovery_class_id
+            recovery_class_id = None
+            if is_recovered:
+                # El recovery que consumió esta licencia es el recovery transaction
+                # que está en la misma posición en el FIFO
+                # Necesitamos mapear recovery transactions a consumed license transactions
+                recovery_index = list(consumed_license_tx_ids).index(license_tx.id) if license_tx.id in consumed_license_tx_ids else -1
+                if recovery_index >= 0 and recovery_index < len(recovery_transactions):
+                    recovery_class_id = recovery_transactions[recovery_index].reference_id
+
+            license_status_list.append(
+                LicenseRecoveryStatus(
+                    attendance_id=attendance.id,
+                    class_date=class_obj.date,
+                    status="recovered" if is_recovered else "pending",
+                    recovery_class_id=recovery_class_id
+                )
+            )
+        else:
+            # Caso edge: asistencia license sin transacción ( shouldn't happen pero por seguridad)
+            license_status_list.append(
+                LicenseRecoveryStatus(
+                    attendance_id=attendance.id,
+                    class_date=class_obj.date,
+                    status="pending",
+                    recovery_class_id=None
+                )
+            )
+
+    return license_status_list
