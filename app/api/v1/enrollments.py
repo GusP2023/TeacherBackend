@@ -1409,7 +1409,23 @@ async def get_license_recovery_status(
         )
         .order_by(CreditTransaction.created_at.asc())
     )
-    license_transactions = license_transactions_result.scalars().all()
+    raw_license_transactions = license_transactions_result.scalars().all()
+
+    # 2.1 Obtener los reversos de licencias para filtrar las anuladas
+    license_reversals_result = await db.execute(
+        select(CreditTransaction.reference_id)
+        .where(
+            CreditTransaction.enrollment_id == enrollment_id,
+            CreditTransaction.source_type == CreditTransactionSource.LICENSE_REVERSAL
+        )
+    )
+    reversed_license_ids = set(license_reversals_result.scalars().all())
+
+    # Filtrar las transacciones de licencia que fueron anuladas
+    license_transactions = [
+        tx for tx in raw_license_transactions 
+        if tx.reference_id not in reversed_license_ids
+    ]
 
     # 3. Obtener todas las transacciones de recuperaciones (source_type='recovery_class')
     recovery_transactions_result = await db.execute(
@@ -1420,7 +1436,23 @@ async def get_license_recovery_status(
         )
         .order_by(CreditTransaction.created_at.asc())
     )
-    recovery_transactions = recovery_transactions_result.scalars().all()
+    raw_recovery_transactions = recovery_transactions_result.scalars().all()
+
+    # 3.1 Obtener los borrados de recuperaciones para filtrar las anuladas
+    recovery_deletions_result = await db.execute(
+        select(CreditTransaction.reference_id)
+        .where(
+            CreditTransaction.enrollment_id == enrollment_id,
+            CreditTransaction.source_type == CreditTransactionSource.RECOVERY_CLASS_DELETED
+        )
+    )
+    deleted_recovery_ids = set(recovery_deletions_result.scalars().all())
+
+    # Filtrar las recuperaciones que fueron borradas
+    recovery_transactions = [
+        tx for tx in raw_recovery_transactions 
+        if tx.reference_id not in deleted_recovery_ids
+    ]
 
     # 4. FIFO: Matchear licencias con recuperaciones
     # Crear una lista de license transaction IDs que fueron consumidas (manteniendo orden FIFO)
