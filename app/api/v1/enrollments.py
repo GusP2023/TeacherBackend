@@ -1330,6 +1330,8 @@ async def get_credit_transactions(
 @router.get("/{enrollment_id}/license-recovery-status", response_model=list[LicenseRecoveryStatus])
 async def get_license_recovery_status(
     enrollment_id: int,
+    month: int | None = Query(None, description="Mes para filtrar (1-12)"),
+    year: int | None = Query(None, description="Año para filtrar"),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
@@ -1421,14 +1423,14 @@ async def get_license_recovery_status(
     recovery_transactions = recovery_transactions_result.scalars().all()
 
     # 4. FIFO: Matchear licencias con recuperaciones
-    # Crear un set de license transaction IDs que fueron consumidas
-    consumed_license_tx_ids = set()
+    # Crear una lista de license transaction IDs que fueron consumidas (manteniendo orden FIFO)
+    consumed_license_tx_list = []
     license_tx_queue = list(license_transactions)  # Copia para consumir
 
     for recovery_tx in recovery_transactions:
         if license_tx_queue:
             consumed_license_tx = license_tx_queue.pop(0)  # FIFO: tomar la más antigua
-            consumed_license_tx_ids.add(consumed_license_tx.id)
+            consumed_license_tx_list.append(consumed_license_tx.id)
 
     # 5. Para cada asistencia de licencia, determinar su estado
     license_status_list = []
@@ -1441,24 +1443,32 @@ async def get_license_recovery_status(
         )
 
         if license_tx:
-            is_recovered = license_tx.id in consumed_license_tx_ids
+            is_recovered = license_tx.id in consumed_license_tx_list
 
-            # Si está recuperada, encontrar el recovery_class_id
+            # Si está recuperada, encontrar el recovery_class_id y recovery_time
             recovery_class_id = None
+            recovery_time = None
             if is_recovered:
                 # El recovery que consumió esta licencia es el recovery transaction
                 # que está en la misma posición en el FIFO
-                # Necesitamos mapear recovery transactions a consumed license transactions
-                recovery_index = list(consumed_license_tx_ids).index(license_tx.id) if license_tx.id in consumed_license_tx_ids else -1
+                recovery_index = consumed_license_tx_list.index(license_tx.id)
                 if recovery_index >= 0 and recovery_index < len(recovery_transactions):
                     recovery_class_id = recovery_transactions[recovery_index].reference_id
+                    # Obtener la hora de la clase de recuperación
+                    recovery_class_result = await db.execute(
+                        select(Class).where(Class.id == recovery_class_id)
+                    )
+                    recovery_class = recovery_class_result.scalar_one_or_none()
+                    if recovery_class:
+                        recovery_time = recovery_class.time.strftime("%H:%M")
 
             license_status_list.append(
                 LicenseRecoveryStatus(
                     attendance_id=attendance.id,
                     class_date=class_obj.date,
                     status="recovered" if is_recovered else "pending",
-                    recovery_class_id=recovery_class_id
+                    recovery_class_id=recovery_class_id,
+                    recovery_time=recovery_time
                 )
             )
         else:
@@ -1468,8 +1478,16 @@ async def get_license_recovery_status(
                     attendance_id=attendance.id,
                     class_date=class_obj.date,
                     status="pending",
-                    recovery_class_id=None
+                    recovery_class_id=None,
+                    recovery_time=None
                 )
             )
+
+    # 6. Aplicar filtro por mes/año si se proporcionaron (después del cálculo FIFO)
+    if month is not None and year is not None:
+        license_status_list = [
+            status for status in license_status_list
+            if status.class_date.month == month and status.class_date.year == year
+        ]
 
     return license_status_list

@@ -51,9 +51,11 @@ class LicenseRecoveryStatus(BaseModel):
     - class_date: Fecha de la clase donde se marcó la licencia
     - status: 'recovered' o 'pending'
     - recovery_class_id: ID de la clase de recuperación que la consumió (si está recuperada)
+    - recovery_time: Hora de la clase de recuperación (formato "HH:MM", si está recuperada)
     """
     attendance_id: int
     class_date: date
     status: Literal["recovered", "pending"]
     recovery_class_id: Optional[int] = None
+    recovery_time: Optional[str] = None
 
