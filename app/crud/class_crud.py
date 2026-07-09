@@ -225,6 +225,10 @@ async def create_recovery(
 
     class_obj = Class(**class_dict)
 
+    # Flush para obtener el ID de la clase antes de crear la transacción
+    db.add(class_obj)
+    await db.flush()
+
     # Descontar crédito
     enrollment.credits -= 1
 

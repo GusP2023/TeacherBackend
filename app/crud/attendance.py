@@ -82,6 +82,9 @@ async def create(db: AsyncSession, attendance_data: AttendanceCreate) -> Attenda
     attendance = Attendance(**attendance_data.model_dump())
     db.add(attendance)
 
+    # Flush para obtener el ID de la asistencia antes de crear la transacción
+    await db.flush()
+
     # Marcar la clase como completada
     class_obj.status = ClassStatus.COMPLETED
 
