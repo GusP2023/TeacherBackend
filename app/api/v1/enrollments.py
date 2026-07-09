@@ -1483,23 +1483,10 @@ async def get_license_recovery_status(
 
     for attendance, class_obj in license_attendances:
         # Buscar la transacción de licencia correspondiente a esta asistencia
-        # Primero intentamos matchear por reference_id (si existe)
         license_tx = next(
             (tx for tx in license_transactions if tx.reference_id == attendance.id),
             None
         )
-        
-        # Si no encontramos por reference_id (datos viejos corruptos), intentamos matchear por fecha
-        if not license_tx:
-            # Buscar transacción creada cerca de la fecha de la asistencia
-            # (tolerancia de 5 minutos para matchear)
-            from datetime import timedelta
-            attendance_time = attendance.created_at
-            license_tx = next(
-                (tx for tx in license_transactions 
-                 if abs((tx.created_at - attendance_time).total_seconds()) < 300),
-                None
-            )
 
         if license_tx:
             is_recovered = license_tx.id in consumed_license_tx_list
