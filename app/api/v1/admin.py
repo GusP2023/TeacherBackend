@@ -49,6 +49,7 @@ from app.models.teacher_availability import TeacherAvailability
 from app.models.enrollment import Enrollment, EnrollmentStatus, EnrollmentLevel
 from app.models.billing_period import BillingPeriod, BillingPeriodStatus
 from app.models.payment import Payment, PaymentConcept, PaymentMethod
+from app.services import credit_service
 from app.models.credit_transaction import CreditTransaction, CreditTransactionSource, CreditTransactionReferenceType
 from app.models.personnel_payment import PersonnelPayment, PersonnelPaymentStatus
 from app.models.fee_discount import FeeDiscount, DiscountType
@@ -1091,26 +1092,6 @@ async def create_payment(
     if data.billing_period_id is not None:
         await _recalculate_billing_status(db, data.billing_period_id)
 
-    # Otorgar créditos si clase_suelta queda completamente pagada
-    if bp and bp.charge_type == "clase_suelta":
-        await db.flush()
-        await db.refresh(bp)
-        if bp.status == BillingPeriodStatus.PAID:
-            credits_amount = bp.quantity or 1
-            enrollment.credits += credits_amount
-
-            # Insertar transacción en el ledger
-            credit_transaction = CreditTransaction(
-                enrollment_id=enrollment.id,
-                amount=credits_amount,
-                source_type=CreditTransactionSource.CLASE_SUELTA_PAYMENT,
-                reference_type=CreditTransactionReferenceType.PAYMENT,
-                reference_id=payment.id,
-                note=None,
-                created_by=current_teacher.id
-            )
-            db.add(credit_transaction)
-
     await db.commit()
     await db.refresh(payment)
 
@@ -1226,47 +1207,11 @@ async def delete_payment(
 
     billing_period_id = payment.billing_period_id
 
-    # Capturar si era clase_suelta pagada (para revertir créditos)
-    was_paid_clase_suelta = False
-    credits_to_revoke = 0
-    bp_for_credit = None
-    enr_for_credit = None
-
-    if billing_period_id:
-        bp_check = await db.execute(
-            select(BillingPeriod).where(BillingPeriod.id == billing_period_id)
-        )
-        bp_for_credit = bp_check.scalar_one_or_none()
-        if (bp_for_credit
-                and bp_for_credit.charge_type == "clase_suelta"
-                and bp_for_credit.status == BillingPeriodStatus.PAID):
-            was_paid_clase_suelta = True
-            credits_to_revoke = bp_for_credit.quantity or 1
-            enr_check = await db.execute(
-                select(Enrollment).where(Enrollment.id == payment.enrollment_id)
-            )
-            enr_for_credit = enr_check.scalar_one_or_none()
-
     await db.delete(payment)
     await db.flush()
 
     if billing_period_id is not None:
         await _recalculate_billing_status(db, billing_period_id)
-
-    if was_paid_clase_suelta and enr_for_credit:
-        enr_for_credit.credits = max(0, enr_for_credit.credits - credits_to_revoke)
-
-        # Insertar transacción en el ledger
-        credit_transaction = CreditTransaction(
-            enrollment_id=enr_for_credit.id,
-            amount=-credits_to_revoke,
-            source_type=CreditTransactionSource.CLASE_SUELTA_PAYMENT_REVERTED,
-            reference_type=CreditTransactionReferenceType.PAYMENT,
-            reference_id=payment_id,
-            note=None,
-            created_by=current_teacher.id
-        )
-        db.add(credit_transaction)
 
     await db.commit()
     return {"deleted": True, "payment_id": payment_id}
@@ -3173,7 +3118,13 @@ async def admin_delete_class(
         )
         enrollment = enrollment_result.scalar_one_or_none()
         if enrollment:
-            enrollment.credits += 1
+            await credit_service.apply(
+                db=db, enrollment=enrollment, amount=1,
+                source_type=CreditTransactionSource.RECOVERY_CLASS_DELETED,
+                reference_id=class_obj.id,
+                reference_type=CreditTransactionReferenceType.CLASS,
+            )
+            await db.flush()
 
     teacher_id = class_obj.teacher_id
     await db.delete(class_obj)
@@ -3258,24 +3209,39 @@ async def admin_update_class_attendance(
 
         if enrollment:
             if prev_is_license and not new_is_license:
-                # Revocar licencia → quitar crédito
-                enrollment.credits = max(0, enrollment.credits - 1)
+                await credit_service.apply(
+                    db=db, enrollment=enrollment, amount=-1,
+                    source_type=CreditTransactionSource.LICENSE_REVERSAL,
+                    reference_id=class_obj.attendance.id,
+                    reference_type=CreditTransactionReferenceType.ATTENDANCE,
+                )
             elif not prev_is_license and new_is_license:
-                # Nueva licencia → dar crédito
-                enrollment.credits += 1
+                await credit_service.apply(
+                    db=db, enrollment=enrollment, amount=1,
+                    source_type=CreditTransactionSource.LICENSE,
+                    reference_id=class_obj.attendance.id,
+                    reference_type=CreditTransactionReferenceType.ATTENDANCE,
+                )
 
         class_obj.attendance.status = data.status
         class_obj.attendance.notes = data.notes
     else:
         # Crear registro de asistencia nuevo
-        if enrollment and data.status in _LICENSE:
-            enrollment.credits += 1
-
-        db.add(Attendance(
+        new_attendance = Attendance(
             class_id=class_obj.id,
             status=data.status,
             notes=data.notes,
-        ))
+        )
+        db.add(new_attendance)
+        await db.flush()
+
+        if enrollment and data.status in _LICENSE:
+            await credit_service.apply(
+                db=db, enrollment=enrollment, amount=1,
+                source_type=CreditTransactionSource.LICENSE,
+                reference_id=new_attendance.id,
+                reference_type=CreditTransactionReferenceType.ATTENDANCE,
+            )
 
     class_obj.status = ClassStatus.COMPLETED
 
@@ -3328,7 +3294,12 @@ async def admin_delete_class_attendance(
         )
         enrollment = enr_result.scalar_one_or_none()
         if enrollment:
-            enrollment.credits = max(0, enrollment.credits - 1)
+            await credit_service.apply(
+                db=db, enrollment=enrollment, amount=-1,
+                source_type=CreditTransactionSource.LICENSE_REVERSAL,
+                reference_id=class_obj.attendance.id,
+                reference_type=CreditTransactionReferenceType.ATTENDANCE,
+            )
 
     teacher_id = class_obj.teacher_id
     attendance_id = class_obj.attendance.id
@@ -4591,8 +4562,26 @@ async def update_admin_enrollment(
     for field, value in update_data.items():
         if field == "level" and value is not None:
             enrollment.level = EnrollmentLevel(value)
+        elif field == "credits":
+            pass  # se maneja abajo
         elif field != "notes":
             setattr(enrollment, field, value)
+
+    # Ajuste manual de créditos con nota obligatoria
+    if "credits" in update_data and update_data["credits"] is not None:
+        note = update_data.get("notes") or data.notes
+        if not note:
+            raise HTTPException(
+                status_code=400,
+                detail="Se requiere el campo 'notes' como motivo al modificar créditos manualmente.",
+            )
+        await credit_service.apply_manual(
+            db=db,
+            enrollment=enrollment,
+            new_credits=update_data["credits"],
+            note=note,
+            created_by=current_teacher.id,
+        )
 
     await db.commit()
     await db.refresh(enrollment)

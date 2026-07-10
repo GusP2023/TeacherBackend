@@ -39,7 +39,8 @@ from app.schemas.enrollment import (
 )
 from app.schemas.credit_transaction import CreditTransactionResponse, LicenseRecoveryStatus
 from app.models.attendance import AttendanceStatus
-from app.models.credit_transaction import CreditTransactionSource
+from app.models.credit_transaction import CreditTransaction, CreditTransactionSource
+from app.utils.credit_utils import calculate_credit_summary
 from app.schemas.suspension import (
     SuspendEnrollmentRequest,
     ReactivateEnrollmentRequest,
@@ -1541,3 +1542,39 @@ async def get_license_recovery_status(
         ]
 
     return license_status_list
+
+
+@router.get(
+    "/{enrollment_id}/credit-summary",
+    summary="Resumen de licencias y recuperaciones de un enrollment",
+)
+async def get_credit_summary(
+    enrollment_id: int,
+    year: int = Query(..., ge=2020, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(get_current_teacher),
+):
+    # 1. Verificar que el enrollment pertenece al teacher
+    result = await db.execute(
+        select(Enrollment).where(
+            Enrollment.id == enrollment_id,
+            Enrollment.teacher_id == current_teacher.id,
+        )
+    )
+    enrollment = result.scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment no encontrado.")
+
+    # 2. Cargar TODAS las credit_transactions del enrollment
+    #    (la función pura necesita el historial completo para
+    #    el pairing correcto, no solo las del mes)
+    tx_result = await db.execute(
+        select(CreditTransaction)
+        .where(CreditTransaction.enrollment_id == enrollment_id)
+        .order_by(CreditTransaction.created_at.asc())
+    )
+    transactions = list(tx_result.scalars().all())
+
+    # 3. Calcular y retornar
+    return calculate_credit_summary(transactions, year, month)

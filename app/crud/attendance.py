@@ -7,7 +7,8 @@ from sqlalchemy import select
 from app.models.attendance import Attendance, AttendanceStatus
 from app.models.enrollment import Enrollment
 from app.models.class_model import Class, ClassStatus
-from app.models.credit_transaction import CreditTransaction, CreditTransactionSource, CreditTransactionReferenceType
+from app.services import credit_service
+from app.models.credit_transaction import CreditTransactionSource, CreditTransactionReferenceType
 from app.schemas.attendance import AttendanceCreate, AttendanceUpdate
 
 
@@ -96,19 +97,14 @@ async def create(db: AsyncSession, attendance_data: AttendanceCreate) -> Attenda
         enrollment = result.scalar_one_or_none()
 
         if enrollment:
-            enrollment.credits += 1
-
-            # Insertar transacción en el ledger
-            credit_transaction = CreditTransaction(
-                enrollment_id=enrollment.id,
+            await credit_service.apply(
+                db=db,
+                enrollment=enrollment,
                 amount=1,
                 source_type=CreditTransactionSource.LICENSE,
-                reference_type=CreditTransactionReferenceType.ATTENDANCE,
                 reference_id=attendance.id,
-                note=None,
-                created_by=None
+                reference_type=CreditTransactionReferenceType.ATTENDANCE,
             )
-            db.add(credit_transaction)
 
     await db.commit()
     await db.refresh(attendance)
@@ -157,21 +153,16 @@ async def delete(db: AsyncSession, attendance_id: int) -> bool:
             enrollment = result.scalar_one_or_none()
 
             if enrollment:
-                if enrollment.credits > 0:
-                    enrollment.credits -= 1
-
-                    # Insertar transacción en el ledger
-                    credit_transaction = CreditTransaction(
-                        enrollment_id=enrollment.id,
+                try:
+                    await credit_service.apply(
+                        db=db,
+                        enrollment=enrollment,
                         amount=-1,
                         source_type=CreditTransactionSource.LICENSE_REVERSAL,
-                        reference_type=CreditTransactionReferenceType.ATTENDANCE,
                         reference_id=attendance.id,
-                        note=None,
-                        created_by=None
+                        reference_type=CreditTransactionReferenceType.ATTENDANCE,
                     )
-                    db.add(credit_transaction)
-                else:
+                except ValueError:
                     raise ValueError("No se puede eliminar asistencia 'license' porque el alumno ya usó los créditos")
 
     await db.delete(attendance)
@@ -236,37 +227,27 @@ async def update(
                 if enrollment:
                     # Caso 1: Cambia A license (otorgar crédito)
                     if old_status != AttendanceStatus.LICENSE and new_status == AttendanceStatus.LICENSE:
-                        enrollment.credits += 1
-
-                        # Insertar transacción en el ledger
-                        credit_transaction = CreditTransaction(
-                            enrollment_id=enrollment.id,
+                        await credit_service.apply(
+                            db=db,
+                            enrollment=enrollment,
                             amount=1,
                             source_type=CreditTransactionSource.LICENSE,
-                            reference_type=CreditTransactionReferenceType.ATTENDANCE,
                             reference_id=attendance.id,
-                            note=None,
-                            created_by=None
+                            reference_type=CreditTransactionReferenceType.ATTENDANCE,
                         )
-                        db.add(credit_transaction)
 
                     # Caso 2: Cambia DESDE license (quitar crédito)
                     elif old_status == AttendanceStatus.LICENSE and new_status != AttendanceStatus.LICENSE:
-                        if enrollment.credits > 0:
-                            enrollment.credits -= 1
-
-                            # Insertar transacción en el ledger
-                            credit_transaction = CreditTransaction(
-                                enrollment_id=enrollment.id,
+                        try:
+                            await credit_service.apply(
+                                db=db,
+                                enrollment=enrollment,
                                 amount=-1,
                                 source_type=CreditTransactionSource.LICENSE_REVERSAL,
-                                reference_type=CreditTransactionReferenceType.ATTENDANCE,
                                 reference_id=attendance.id,
-                                note=None,
-                                created_by=None
+                                reference_type=CreditTransactionReferenceType.ATTENDANCE,
                             )
-                            db.add(credit_transaction)
-                        else:
+                        except ValueError:
                             raise ValueError("No se puede cambiar de 'license' porque el alumno ya usó los créditos")
     
     # Aplicar cambios

@@ -8,7 +8,8 @@ from sqlalchemy import select, and_
 from datetime import datetime, date
 from app.models.class_model import Class, ClassStatus, ClassType
 from app.models.enrollment import Enrollment
-from app.models.credit_transaction import CreditTransaction, CreditTransactionSource, CreditTransactionReferenceType
+from app.services import credit_service
+from app.models.credit_transaction import CreditTransactionSource, CreditTransactionReferenceType
 from app.schemas.class_schema import ClassCreate, ClassUpdate
 
 logger = logging.getLogger(__name__)
@@ -229,20 +230,14 @@ async def create_recovery(
     db.add(class_obj)
     await db.flush()
 
-    # Descontar crédito
-    enrollment.credits -= 1
-
-    # Insertar transacción en el ledger
-    credit_transaction = CreditTransaction(
-        enrollment_id=enrollment.id,
+    await credit_service.apply(
+        db=db,
+        enrollment=enrollment,
         amount=-1,
         source_type=CreditTransactionSource.RECOVERY_CLASS,
-        reference_type=CreditTransactionReferenceType.CLASS,
         reference_id=class_obj.id,
-        note=None,
-        created_by=None
+        reference_type=CreditTransactionReferenceType.CLASS,
     )
-    db.add(credit_transaction)
 
     # Guardar ambos cambios en una transacción
     db.add(class_obj)
@@ -371,20 +366,14 @@ async def delete_recovery(db: AsyncSession, class_id: int) -> bool:
     if not enrollment:
         raise ValueError(f"Enrollment {class_obj.enrollment_id} no existe")
     
-    # Devolver el crédito
-    enrollment.credits += 1
-
-    # Insertar transacción en el ledger
-    credit_transaction = CreditTransaction(
-        enrollment_id=enrollment.id,
+    await credit_service.apply(
+        db=db,
+        enrollment=enrollment,
         amount=1,
         source_type=CreditTransactionSource.RECOVERY_CLASS_DELETED,
-        reference_type=CreditTransactionReferenceType.CLASS,
         reference_id=class_obj.id,
-        note=None,
-        created_by=None
+        reference_type=CreditTransactionReferenceType.CLASS,
     )
-    db.add(credit_transaction)
 
     # Eliminar la clase físicamente
     await db.delete(class_obj)

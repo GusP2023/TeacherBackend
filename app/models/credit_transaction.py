@@ -15,13 +15,10 @@ Tipos de transacción (source_type):
 - recovery_class: Consumido por crear clase de recuperación (-1)
 - recovery_class_deleted: Devuelto por eliminar clase de recuperación (+1)
 - manual_adjustment: Ajuste manual directo (puede ser + o -)
-- clase_suelta_payment: Otorgado por pago de clase suelta completado (+quantity)
-- clase_suelta_payment_reverted: Revocado por eliminar pago de clase suelta (-quantity)
 
 Tipos de referencia (reference_type):
 - attendance: La transacción se originó desde un registro de asistencia
 - class: La transacción se originó desde una clase
-- payment: La transacción se originó desde un pago
 - null: Ajuste manual sin referencia específica
 """
 
@@ -48,16 +45,12 @@ class CreditTransactionSource(str, enum.Enum):
     - RECOVERY_CLASS: Consumido por crear clase de recuperación
     - RECOVERY_CLASS_DELETED: Devuelto por eliminar clase de recuperación
     - MANUAL_ADJUSTMENT: Ajuste manual directo por admin/profesor
-    - CLASE_SUELTA_PAYMENT: Otorgado por pago de clase suelta completado
-    - CLASE_SUELTA_PAYMENT_REVERTED: Revocado por eliminar pago de clase suelta
     """
     LICENSE = "license"
     LICENSE_REVERSAL = "license_reversal"
     RECOVERY_CLASS = "recovery_class"
     RECOVERY_CLASS_DELETED = "recovery_class_deleted"
     MANUAL_ADJUSTMENT = "manual_adjustment"
-    CLASE_SUELTA_PAYMENT = "clase_suelta_payment"
-    CLASE_SUELTA_PAYMENT_REVERTED = "clase_suelta_payment_reverted"
 
 
 class CreditTransactionReferenceType(str, enum.Enum):
@@ -66,11 +59,9 @@ class CreditTransactionReferenceType(str, enum.Enum):
     
     - ATTENDANCE: Referencia a un registro de attendance
     - CLASS: Referencia a una clase
-    - PAYMENT: Referencia a un pago
     """
     ATTENDANCE = "attendance"
     CLASS = "class"
-    PAYMENT = "payment"
 
 
 class CreditTransaction(Base, TimestampMixin):
@@ -165,13 +156,13 @@ class CreditTransaction(Base, TimestampMixin):
     reference_type: Mapped[Optional[CreditTransactionReferenceType]] = mapped_column(
         SQLEnum(CreditTransactionReferenceType, native_enum=False, values_callable=lambda x: [e.value for e in x]),
         nullable=True,
-        comment="Tipo de entidad de referencia (attendance, class, payment)"
+        comment="Tipo de entidad de referencia (attendance, class)"
     )
     
     reference_id: Mapped[Optional[int]] = mapped_column(
         Integer,
         nullable=True,
-        comment="ID de la entidad de referencia (attendance_id, class_id, payment_id)"
+        comment="ID de la entidad de referencia (attendance_id, class_id)"
     )
     
     # ========================================
@@ -181,7 +172,7 @@ class CreditTransaction(Base, TimestampMixin):
     note: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
-        comment="Nota explicativa (útil para ajustes manuales)"
+        comment="Nota explicativa. Obligatoria para MANUAL_ADJUSTMENT."
     )
     
     created_by: Mapped[Optional[int]] = mapped_column(
