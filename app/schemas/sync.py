@@ -33,6 +33,7 @@ from app.schemas.class_schema import ClassResponse
 from app.schemas.attendance import AttendanceResponse
 from app.schemas.instrument import InstrumentResponse
 from app.schemas.enrollment_note import EnrollmentNoteResponse
+from app.schemas.credit_transaction import CreditTransactionResponse
 
 
 # ========================================
@@ -98,6 +99,8 @@ class InitialSyncResponse(BaseModel):
     - classes: Todas las clases del año
     - attendances: Todas las asistencias del año
     - instruments: Todos los instrumentos disponibles
+    - credit_transactions: Todas las transacciones de créditos del profesor
+    - data_version: Versión del esquema de datos (para detectar cambios)
     - metadata: Timestamp y conteo total
 
     El frontend guarda todo esto en localStorage para uso offline.
@@ -110,6 +113,8 @@ class InitialSyncResponse(BaseModel):
         "classes": [...],
         "attendances": [...],
         "instruments": [...],
+        "credit_transactions": [...],
+        "data_version": 1,
         "metadata": {
             "sync_timestamp": "2025-01-27T12:00:00Z",
             "total_records": 1234
@@ -124,6 +129,8 @@ class InitialSyncResponse(BaseModel):
     attendances: List[AttendanceResponse]
     instruments: List[InstrumentResponse]
     notes: List[EnrollmentNoteResponse]
+    credit_transactions: List[CreditTransactionResponse]
+    data_version: int
     metadata: SyncMetadata
 
 class SchedulesDelta(BaseModel):
@@ -135,13 +142,18 @@ class DeltaSyncResponse(BaseModel):
     Response de sincronización incremental (delta) mejorado.
 
     Estructura simplificada para facilitar el manejo de estados en frontend.
+
+    Si needs_full_sync es true, el cliente debe ignorar los demás campos
+    y ejecutar un full sync en su lugar (data_version desactualizado).
     """
+    needs_full_sync: bool = False
     schedules: SchedulesDelta
     enrollments: List[EnrollmentResponse]
     classes: List[ClassResponse]
     students: List[StudentResponse] = []
     attendances: List[AttendanceResponse] = []
     notes: List[EnrollmentNoteResponse] = []
+    credit_transactions: List[CreditTransactionResponse] = []
     valid_class_ids: List[int] = []  # IDs de todas las clases reales del profesor (para purgar eliminadas)
     valid_attendance_ids: List[int] = [] # IDs de todas las asistencias reales del profesor
     valid_note_ids: List[int] = [] # IDs de todas las notas reales del profesor

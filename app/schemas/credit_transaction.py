@@ -21,6 +21,7 @@ class CreditTransactionResponse(BaseModel):
     - enrollment_id: a qué inscripción pertenece
     - amount: cantidad de créditos (+ para otorgar, - para consumir)
     - source_type: tipo de origen de la transacción
+    - consumed_credit_tx_id: ID de la transacción de crédito que consumió esta RECOVERY_CLASS (opcional)
     - reference_type: tipo de entidad de referencia (opcional)
     - reference_id: ID de la entidad de referencia (opcional)
     - note: nota explicativa (opcional)
@@ -32,6 +33,7 @@ class CreditTransactionResponse(BaseModel):
     enrollment_id: int
     amount: int
     source_type: CreditTransactionSource
+    consumed_credit_tx_id: Optional[int] = None
     reference_type: Optional[CreditTransactionReferenceType] = None
     reference_id: Optional[int] = None
     note: Optional[str] = None

@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     # ========================================
     ENVIRONMENT: str = "development"  # development, staging, production
     DEBUG: bool = True
+
+    # ========================================
+    # DATA VERSION (SYNC)
+    # ========================================
+    # Incrementar cuando se agregue algo al sync que usuarios existentes
+    # necesiten recibir sí o sí (ej. nuevas entidades, cambios de schema).
+    # El frontend compara su data_version local con este valor y hace
+    # full sync si está desactualizado.
+    CURRENT_DATA_VERSION: int = 1
     
     # ========================================
     # BASE DE DATOS

@@ -20,6 +20,7 @@ from sqlalchemy import select, and_, or_
 
 from app.core.database import get_db
 from app.core.security import get_current_teacher
+from app.core.config import settings
 from app.models import (
     Teacher,
     Student,
@@ -29,6 +30,7 @@ from app.models import (
     Attendance,
     Instrument,
     EnrollmentNote,
+    CreditTransaction,
 )
 from app.schemas.sync import (
     InitialSyncRequest,
@@ -161,7 +163,22 @@ async def sync_initial(
     notes = notes_result.scalars().all()
 
     # ========================================
-    # 8. METADATA
+    # 8. CARGAR CREDIT_TRANSACTIONS DEL PROFESOR
+    # ========================================
+    # Todas las transacciones de créditos de los enrollments del profesor
+    # NO implementamos Delta Purging para créditos porque el ledger
+    # CreditTransaction no hace hard delete en operación normal.
+    # Las transacciones solo se crean o actualizan (ej. liberar consumed_credit_tx_id).
+    credit_tx_query = select(CreditTransaction).where(
+        CreditTransaction.enrollment_id.in_(
+            select(Enrollment.id).where(Enrollment.teacher_id == current_teacher.id)
+        )
+    )
+    credit_tx_result = await db.execute(credit_tx_query)
+    credit_transactions = credit_tx_result.scalars().all()
+
+    # ========================================
+    # 9. METADATA
     # ========================================
     total_records = (
         len(students)
@@ -171,6 +188,7 @@ async def sync_initial(
         + len(attendances)
         + len(instruments)
         + len(notes)
+        + len(credit_transactions)
     )
 
     metadata = SyncMetadata(
@@ -179,7 +197,7 @@ async def sync_initial(
     )
 
     # ========================================
-    # 9. RESPUESTA
+    # 10. RESPUESTA
     # ========================================
     return InitialSyncResponse(
         students=list(students),  # type: ignore
@@ -189,6 +207,8 @@ async def sync_initial(
         attendances=list(attendances),  # type: ignore
         instruments=list(instruments),  # type: ignore
         notes=list(notes),  # type: ignore
+        credit_transactions=list(credit_transactions),  # type: ignore
+        data_version=settings.CURRENT_DATA_VERSION,
         metadata=metadata,
     )
 
@@ -196,6 +216,7 @@ async def sync_initial(
 @router.get("/delta", response_model=DeltaSyncResponse)
 async def sync_delta(
     last_sync: str = Query(..., description="ISO datetime del último sync"),
+    client_data_version: int = Query(None, description="Versión de datos del cliente"),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
@@ -204,8 +225,30 @@ async def sync_delta(
     - Registros nuevos/actualizados
     - Schedules desactivados recientemente
     - Enrollments suspendidos/reactivados
+    - Credit transactions actualizadas
+    - Data version check (forzar full sync si versión desactualizada)
     """
     from datetime import datetime
+
+    # ========================================
+    # CHECK DATA VERSION
+    # ========================================
+    # Si el cliente no envía versión o está desactualizado, forzar full sync
+    if client_data_version is None or client_data_version < settings.CURRENT_DATA_VERSION:
+        return {
+            "needs_full_sync": True,
+            "schedules": {"active": [], "deactivated": []},
+            "enrollments": [],
+            "classes": [],
+            "students": [],
+            "attendances": [],
+            "notes": [],
+            "credit_transactions": [],
+            "valid_class_ids": [],
+            "valid_attendance_ids": [],
+            "valid_note_ids": [],
+            "sync_timestamp": datetime.now().isoformat()
+        }
     
     # Parsear fecha, manejando posible espacio en lugar de + para timezone
     try:
@@ -298,7 +341,22 @@ async def sync_delta(
     )
     notes = notes_result.scalars().all()
 
-    # 8. IDs de TODAS las notas vigentes del profesor (para purgar eliminadas en mobile)
+    # 8. Credit transactions actualizadas desde el último sync
+    # NO implementamos Delta Purging para créditos porque el ledger
+    # CreditTransaction no hace hard delete en operación normal.
+    credit_tx_result = await db.execute(
+        select(CreditTransaction).where(
+            and_(
+                CreditTransaction.enrollment_id.in_(
+                    select(Enrollment.id).where(Enrollment.teacher_id == current_teacher.id)
+                ),
+                CreditTransaction.updated_at > last_sync_date
+            )
+        )
+    )
+    credit_transactions = credit_tx_result.scalars().all()
+
+    # 9. IDs de TODAS las notas vigentes del profesor (para purgar eliminadas en mobile)
     valid_notes_result = await db.execute(
         select(EnrollmentNote.id).where(
             EnrollmentNote.teacher_id == current_teacher.id
@@ -336,6 +394,7 @@ async def sync_delta(
     valid_attendance_ids = [row[0] for row in valid_att_result.all()]
 
     return {
+        "needs_full_sync": False,
         "schedules": {
             "active": active_schedules,
             "deactivated": deactivated_schedules
@@ -345,6 +404,7 @@ async def sync_delta(
         "students": list(students),
         "attendances": list(attendances),
         "notes": list(notes),
+        "credit_transactions": list(credit_transactions),
         "valid_class_ids": list(valid_class_ids),
         "valid_attendance_ids": list(valid_attendance_ids),
         "valid_note_ids": list(valid_note_ids),
