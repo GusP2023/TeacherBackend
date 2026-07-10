@@ -256,15 +256,20 @@ async def notify_data_change(
     })
 
     try:
-        from sqlalchemy import text
+        from sqlalchemy import text, select
+        from app.models.teacher import Teacher
         async with async_session_maker() as session:
+            t_result = await session.execute(select(Teacher.name).where(Teacher.id == teacher_id))
+            t_name = t_result.scalar_one_or_none()
+            name_display = f" - {t_name}" if t_name else ""
+            
             # pg_notify es asíncrono y ultra liviano
             await session.execute(
                 text("SELECT pg_notify('ws_notifications', :payload)"),
                 {"payload": payload}
             )
             await session.commit()
-        logger.info(f"[WebSocket] Notificación publicada en PG (Profesor {teacher_id}): {entity} {operation} id={entity_id}")
+        logger.info(f"Notify[T{teacher_id}{name_display}] {entity}.{operation} id={entity_id}")
     except Exception as e:
         logger.error(f"[WebSocket] Error publicando notificación en PG (fallando a local): {e}")
         # Fallback local

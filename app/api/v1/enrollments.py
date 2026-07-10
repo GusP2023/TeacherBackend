@@ -1428,11 +1428,6 @@ async def get_license_recovery_status(
         if tx.reference_id not in reversed_license_ids
     ]
 
-    # DEBUG: Log transacciones de licencia
-    print(f"DEBUG license-recovery-status enrollment_id={enrollment_id} month={month} year={year}")
-    print(f"  license_transactions ({len(license_transactions)}):")
-    for tx in license_transactions:
-        print(f"    id={tx.id}, reference_id={tx.reference_id}, created_at={tx.created_at}")
 
     # 3. Obtener todas las transacciones de recuperaciones (source_type='recovery_class')
     recovery_transactions_result = await db.execute(
@@ -1461,10 +1456,6 @@ async def get_license_recovery_status(
         if tx.reference_id not in deleted_recovery_ids
     ]
 
-    # DEBUG: Log transacciones de recuperación
-    print(f"  recovery_transactions ({len(recovery_transactions)}):")
-    for tx in recovery_transactions:
-        print(f"    id={tx.id}, reference_id={tx.reference_id}, created_at={tx.created_at}")
 
     # 4. FIFO: Matchear licencias con recuperaciones
     # Crear una lista de license transaction IDs que fueron consumidas (manteniendo orden FIFO)
@@ -1476,8 +1467,6 @@ async def get_license_recovery_status(
             consumed_license_tx = license_tx_queue.pop(0)  # FIFO: tomar la más antigua
             consumed_license_tx_list.append(consumed_license_tx.id)
 
-    # DEBUG: Log resultado del FIFO
-    print(f"  consumed_license_tx_list ({len(consumed_license_tx_list)}): {consumed_license_tx_list}")
 
     # 5. Para cada asistencia de licencia, determinar su estado
     license_status_list = []
@@ -1518,8 +1507,6 @@ async def get_license_recovery_status(
                     recovery_time=recovery_time
                 )
             )
-            # DEBUG: Log resultado por asistencia
-            print(f"  attendance_id={attendance.id}, class_date={class_obj.date}, license_tx_id={license_tx.id if license_tx else None}, is_recovered={is_recovered}, status={'recovered' if is_recovered else 'pending'}")
         else:
             # Caso edge: asistencia license sin transacción ( shouldn't happen pero por seguridad)
             license_status_list.append(
@@ -1531,8 +1518,6 @@ async def get_license_recovery_status(
                     recovery_time=None
                 )
             )
-            # DEBUG: Log caso edge
-            print(f"  attendance_id={attendance.id}, class_date={class_obj.date}, NO license_tx found, status=pending")
 
     # 6. Aplicar filtro por mes/año si se proporcionaron (después del cálculo FIFO)
     if month is not None and year is not None:

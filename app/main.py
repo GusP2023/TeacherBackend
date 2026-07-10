@@ -28,6 +28,14 @@ from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+import logging
+
+class WsTokenFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Hide websocket connections with token from uvicorn access logs
+        return "/api/v1/ws?token=" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(WsTokenFilter())
 
 from app.core.config import settings
 from app.core.scheduler import start_scheduler, shutdown_scheduler, check_and_run_missed_job
