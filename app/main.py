@@ -32,10 +32,14 @@ import logging
 
 class WsTokenFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        # Hide websocket connections with token from uvicorn access logs
-        return "/api/v1/ws?token=" not in record.getMessage()
+        # Hide websocket connections with token from uvicorn/gunicorn/websockets logs
+        if record.getMessage() and "/api/v1/ws?token=" in record.getMessage():
+            return False
+        return True
 
-logging.getLogger("uvicorn.access").addFilter(WsTokenFilter())
+# Aplicar a los loggers comunes que podrían emitir este log
+for logger_name in ["uvicorn.access", "uvicorn.error", "websockets.server", "gunicorn.access"]:
+    logging.getLogger(logger_name).addFilter(WsTokenFilter())
 
 from app.core.config import settings
 from app.core.scheduler import start_scheduler, shutdown_scheduler, check_and_run_missed_job
