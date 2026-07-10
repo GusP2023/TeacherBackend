@@ -1452,23 +1452,14 @@ async def get_license_recovery_status(
 
     # Filtrar las recuperaciones que fueron borradas
     recovery_transactions = [
-        tx for tx in raw_recovery_transactions 
+        tx for tx in raw_recovery_transactions
         if tx.reference_id not in deleted_recovery_ids
     ]
 
+    # 3.2 Verificar si hay datos nuevos (algunas RECOVERY_CLASS con consumed_credit_tx_id)
+    has_new_data = any(tx.consumed_credit_tx_id is not None for tx in recovery_transactions)
 
-    # 4. FIFO: Matchear licencias con recuperaciones
-    # Crear una lista de license transaction IDs que fueron consumidas (manteniendo orden FIFO)
-    consumed_license_tx_list = []
-    license_tx_queue = list(license_transactions)  # Copia para consumir
-
-    for recovery_tx in recovery_transactions:
-        if license_tx_queue:
-            consumed_license_tx = license_tx_queue.pop(0)  # FIFO: tomar la más antigua
-            consumed_license_tx_list.append(consumed_license_tx.id)
-
-
-    # 5. Para cada asistencia de licencia, determinar su estado
+    # 4. Determinar estado de cada licencia
     license_status_list = []
 
     for attendance, class_obj in license_attendances:
@@ -1479,17 +1470,20 @@ async def get_license_recovery_status(
         )
 
         if license_tx:
-            is_recovered = license_tx.id in consumed_license_tx_list
-
-            # Si está recuperada, encontrar el recovery_class_id y recovery_time
+            is_recovered = False
             recovery_class_id = None
             recovery_time = None
-            if is_recovered:
-                # El recovery que consumió esta licencia es el recovery transaction
-                # que está en la misma posición en el FIFO
-                recovery_index = consumed_license_tx_list.index(license_tx.id)
-                if recovery_index >= 0 and recovery_index < len(recovery_transactions):
-                    recovery_class_id = recovery_transactions[recovery_index].reference_id
+
+            # PRIORIDAD 1: Usar vínculo explícito si existe (datos nuevos)
+            if has_new_data:
+                # Buscar RECOVERY_CLASS que consumió esta licencia específicamente
+                matching_recovery = next(
+                    (tx for tx in recovery_transactions if tx.consumed_credit_tx_id == license_tx.id),
+                    None
+                )
+                if matching_recovery:
+                    is_recovered = True
+                    recovery_class_id = matching_recovery.reference_id
                     # Obtener la hora de la clase de recuperación
                     recovery_class_result = await db.execute(
                         select(Class).where(Class.id == recovery_class_id)
@@ -1497,6 +1491,31 @@ async def get_license_recovery_status(
                     recovery_class = recovery_class_result.scalar_one_or_none()
                     if recovery_class:
                         recovery_time = recovery_class.time.strftime("%H:%M")
+                # Si no hay match exacto y hay datos nuevos, marcar como pending
+                # (no usar FIFO para evitar mezclar lógica vieja con nueva)
+            else:
+                # PRIORIDAD 2: Fallback a FIFO viejo (solo si no hay datos nuevos)
+                # Reconstruir la lógica FIFO original
+                consumed_license_tx_list = []
+                license_tx_queue = list(license_transactions)
+
+                for recovery_tx in recovery_transactions:
+                    if license_tx_queue:
+                        consumed_license_tx = license_tx_queue.pop(0)
+                        consumed_license_tx_list.append(consumed_license_tx.id)
+
+                is_recovered = license_tx.id in consumed_license_tx_list
+
+                if is_recovered:
+                    recovery_index = consumed_license_tx_list.index(license_tx.id)
+                    if recovery_index >= 0 and recovery_index < len(recovery_transactions):
+                        recovery_class_id = recovery_transactions[recovery_index].reference_id
+                        recovery_class_result = await db.execute(
+                            select(Class).where(Class.id == recovery_class_id)
+                        )
+                        recovery_class = recovery_class_result.scalar_one_or_none()
+                        if recovery_class:
+                            recovery_time = recovery_class.time.strftime("%H:%M")
 
             license_status_list.append(
                 LicenseRecoveryStatus(
@@ -1508,7 +1527,7 @@ async def get_license_recovery_status(
                 )
             )
         else:
-            # Caso edge: asistencia license sin transacción ( shouldn't happen pero por seguridad)
+            # Caso edge: asistencia license sin transacción (shouldn't happen pero por seguridad)
             license_status_list.append(
                 LicenseRecoveryStatus(
                     attendance_id=attendance.id,

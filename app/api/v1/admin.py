@@ -3209,6 +3209,30 @@ async def admin_update_class_attendance(
 
         if enrollment:
             if prev_is_license and not new_is_license:
+                # Buscar la transacción LICENSE original para liberar el consumed_credit_tx_id
+                from app.models.credit_transaction import CreditTransaction
+                license_tx_result = await db.execute(
+                    select(CreditTransaction).where(
+                        CreditTransaction.enrollment_id == class_obj.enrollment_id,
+                        CreditTransaction.source_type == CreditTransactionSource.LICENSE,
+                        CreditTransaction.reference_id == class_obj.attendance.id
+                    )
+                )
+                license_tx = license_tx_result.scalar_one_or_none()
+
+                # Liberar el consumed_credit_tx_id si existe (algun RECOVERY_CLASS consumió esta licencia)
+                if license_tx:
+                    # Buscar RECOVERY_CLASS que consumió esta licencia y liberarla
+                    recovery_tx_result = await db.execute(
+                        select(CreditTransaction).where(
+                            CreditTransaction.consumed_credit_tx_id == license_tx.id,
+                            CreditTransaction.source_type == CreditTransactionSource.RECOVERY_CLASS
+                        )
+                    )
+                    recovery_tx = recovery_tx_result.scalar_one_or_none()
+                    if recovery_tx:
+                        recovery_tx.consumed_credit_tx_id = None
+
                 await credit_service.apply(
                     db=db, enrollment=enrollment, amount=-1,
                     source_type=CreditTransactionSource.LICENSE_REVERSAL,
@@ -3294,6 +3318,30 @@ async def admin_delete_class_attendance(
         )
         enrollment = enr_result.scalar_one_or_none()
         if enrollment:
+            # Buscar la transacción LICENSE original para liberar el consumed_credit_tx_id
+            from app.models.credit_transaction import CreditTransaction
+            license_tx_result = await db.execute(
+                select(CreditTransaction).where(
+                    CreditTransaction.enrollment_id == class_obj.enrollment_id,
+                    CreditTransaction.source_type == CreditTransactionSource.LICENSE,
+                    CreditTransaction.reference_id == class_obj.attendance.id
+                )
+            )
+            license_tx = license_tx_result.scalar_one_or_none()
+
+            # Liberar el consumed_credit_tx_id si existe (algun RECOVERY_CLASS consumió esta licencia)
+            if license_tx:
+                # Buscar RECOVERY_CLASS que consumió esta licencia y liberarla
+                recovery_tx_result = await db.execute(
+                    select(CreditTransaction).where(
+                        CreditTransaction.consumed_credit_tx_id == license_tx.id,
+                        CreditTransaction.source_type == CreditTransactionSource.RECOVERY_CLASS
+                    )
+                )
+                recovery_tx = recovery_tx_result.scalar_one_or_none()
+                if recovery_tx:
+                    recovery_tx.consumed_credit_tx_id = None
+
             await credit_service.apply(
                 db=db, enrollment=enrollment, amount=-1,
                 source_type=CreditTransactionSource.LICENSE_REVERSAL,

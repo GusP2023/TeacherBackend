@@ -135,18 +135,29 @@ class CreditTransaction(Base, TimestampMixin):
     # ========================================
     # MONTO Y ORIGEN
     # ========================================
-    
+
     amount: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
         comment="Cantidad de créditos (+ para otorgar, - para consumir)"
     )
-    
+
     source_type: Mapped[CreditTransactionSource] = mapped_column(
         SQLEnum(CreditTransactionSource, native_enum=False, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         index=True,
         comment="Tipo de origen de la transacción"
+    )
+
+    # ========================================
+    # VÍNCULO DE CONSUMO (para RECOVERY_CLASS)
+    # ========================================
+
+    consumed_credit_tx_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("credit_transactions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="ID de la transacción de crédito (LICENSE o MANUAL_ADJUSTMENT) que consumió esta transacción RECOVERY_CLASS. Solo aplica a débitos."
     )
     
     # ========================================

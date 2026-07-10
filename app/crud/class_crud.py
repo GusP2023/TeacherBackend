@@ -4,7 +4,8 @@ CRUD operations for Class model
 
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, not_, exists
+from sqlalchemy.orm import aliased
 from datetime import datetime, date
 from app.models.class_model import Class, ClassStatus, ClassType
 from app.models.enrollment import Enrollment
@@ -162,17 +163,18 @@ async def create_recovery(
 ) -> Class | None:
     """
     Crear una clase de recuperación (con validación de créditos)
-    
+
     Valida que el enrollment tenga créditos disponibles (>= 1)
-    Descuenta -1 crédito automáticamente
-    
+    Descuenta -1 crédito automáticamente y vincula la transacción RECOVERY_CLASS
+    al crédito específico que consume (LICENSE o MANUAL_ADJUSTMENT) usando FIFO.
+
     Args:
         db: Sesión de base de datos
         class_data: Datos de la clase a crear (debe tener type='recovery')
-    
+
     Returns:
         Class creada si hay créditos, None si no hay créditos suficientes
-    
+
     Raises:
         ValueError: Si no hay créditos suficientes
     """
@@ -181,14 +183,14 @@ async def create_recovery(
         select(Enrollment).where(Enrollment.id == class_data.enrollment_id)
     )
     enrollment = result.scalar_one_or_none()
-    
+
     if not enrollment:
         raise ValueError(f"Enrollment {class_data.enrollment_id} no existe")
-    
+
     # Validar créditos
     if enrollment.credits < 1:
         raise ValueError(f"No hay créditos disponibles. Créditos actuales: {enrollment.credits}")
-    
+
     # Validar que no exista ya una recuperación para el mismo enrollment+fecha+hora.
     # Esto previene duplicados por doble-tap o reintento de sync concurrente.
     duplicate_result = await db.execute(
@@ -212,7 +214,45 @@ async def create_recovery(
             f"Ya existe una recuperación para esta inscripción el "
             f"{class_data.date} a las {str(class_data.time)[:5]} (ID: {existing_recovery.id})"
         )
-    
+
+    # Buscar créditos disponibles (LICENSE o MANUAL_ADJUSTMENT) que no hayan sido consumidos
+    # Un crédito está disponible si no existe ninguna RECOVERY_CLASS con consumed_credit_tx_id apuntando a él
+    from app.models.credit_transaction import CreditTransaction
+
+    # Alias para la tabla de recovery transactions
+    RecoveryTx = aliased(CreditTransaction, name='recovery_tx')
+
+    # Subquery: verificar si existe alguna RECOVERY_CLASS que consuma este crédito
+    consumed_subq = exists(
+        select(1)
+        .where(
+            RecoveryTx.consumed_credit_tx_id == CreditTransaction.id,
+            RecoveryTx.source_type == CreditTransactionSource.RECOVERY_CLASS
+        )
+    )
+
+    available_credits_result = await db.execute(
+        select(CreditTransaction)
+        .where(
+            CreditTransaction.enrollment_id == class_data.enrollment_id,
+            CreditTransaction.source_type.in_([
+                CreditTransactionSource.LICENSE,
+                CreditTransactionSource.MANUAL_ADJUSTMENT
+            ]),
+            CreditTransaction.amount > 0,  # Solo créditos positivos
+            # No está consumido por ninguna RECOVERY_CLASS
+            not_(consumed_subq)
+        )
+        .order_by(CreditTransaction.created_at.asc())
+    )
+    available_credits = available_credits_result.scalars().all()
+
+    if not available_credits:
+        raise ValueError(f"No hay créditos disponibles para consumir. Créditos actuales: {enrollment.credits}")
+
+    # FIFO: tomar el crédito más antiguo disponible
+    credit_to_consume = available_credits[0]
+
     # Crear la clase de recuperación
     class_dict = class_data.model_dump()
     class_dict['type'] = ClassType.RECOVERY  # Forzar type='recovery'
@@ -237,6 +277,7 @@ async def create_recovery(
         source_type=CreditTransactionSource.RECOVERY_CLASS,
         reference_id=class_obj.id,
         reference_type=CreditTransactionReferenceType.CLASS,
+        consumed_credit_tx_id=credit_to_consume.id,
     )
 
     # Guardar ambos cambios en una transacción
@@ -330,17 +371,18 @@ async def cancel(db: AsyncSession, class_id: int) -> Class | None:
 async def delete_recovery(db: AsyncSession, class_id: int) -> bool:
     """
     Eliminar una clase de recuperación (físicamente)
-    
+
     Valida que sea type='recovery' y NO tenga attendance
     Elimina la clase y devuelve +1 crédito al enrollment
-    
+    Libera el consumed_credit_tx_id para que el crédito pueda ser consumido nuevamente
+
     Args:
         db: Sesión de base de datos
         class_id: ID de la clase de recuperación a eliminar
-    
+
     Returns:
         True si se eliminó correctamente
-    
+
     Raises:
         ValueError: Si no es recovery, tiene attendance, o no existe
     """
@@ -349,23 +391,38 @@ async def delete_recovery(db: AsyncSession, class_id: int) -> bool:
         select(Class).where(Class.id == class_id)
     )
     class_obj = result.scalar_one_or_none()
-    
+
     if not class_obj:
         raise ValueError(f"Clase {class_id} no existe")
-    
+
     # Validar que sea recovery
     if class_obj.type != ClassType.RECOVERY:
         raise ValueError(f"Solo se pueden eliminar clases de recuperación. Esta clase es tipo '{class_obj.type}'")
-    
+
     # Obtener el enrollment
     result = await db.execute(
         select(Enrollment).where(Enrollment.id == class_obj.enrollment_id)
     )
     enrollment = result.scalar_one_or_none()
-    
+
     if not enrollment:
         raise ValueError(f"Enrollment {class_obj.enrollment_id} no existe")
-    
+
+    # Buscar la transacción RECOVERY_CLASS original para liberar el consumed_credit_tx_id
+    from app.models.credit_transaction import CreditTransaction
+    recovery_tx_result = await db.execute(
+        select(CreditTransaction).where(
+            CreditTransaction.enrollment_id == class_obj.enrollment_id,
+            CreditTransaction.source_type == CreditTransactionSource.RECOVERY_CLASS,
+            CreditTransaction.reference_id == class_obj.id
+        )
+    )
+    recovery_tx = recovery_tx_result.scalar_one_or_none()
+
+    # Liberar el consumed_credit_tx_id si existe
+    if recovery_tx and recovery_tx.consumed_credit_tx_id is not None:
+        recovery_tx.consumed_credit_tx_id = None
+
     await credit_service.apply(
         db=db,
         enrollment=enrollment,

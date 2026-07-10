@@ -27,6 +27,7 @@ async def apply(
     reference_type: CreditTransactionReferenceType | None = None,
     note: str | None = None,
     created_by: int | None = None,
+    consumed_credit_tx_id: int | None = None,
 ) -> CreditTransaction | None:
     """
     Aplica un cambio al balance de créditos de una inscripción.
@@ -44,6 +45,7 @@ async def apply(
         reference_type: Tipo de la entidad relacionada (opcional).
         note: Nota explicativa (opcional, requerida para ajustes manuales).
         created_by: ID del usuario/profesor que realiza la acción (opcional).
+        consumed_credit_tx_id: ID de la transacción de crédito que consume esta RECOVERY_CLASS (opcional).
 
     Returns:
         CreditTransaction: La transacción creada si fue exitosa.
@@ -65,6 +67,7 @@ async def apply(
         reference_type=reference_type,
         note=note,
         created_by=created_by,
+        consumed_credit_tx_id=consumed_credit_tx_id,
     )
     db.add(transaction)
 
