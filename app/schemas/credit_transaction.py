@@ -40,6 +40,7 @@ class CreditTransactionResponse(BaseModel):
     created_by: Optional[int] = None
     created_at: datetime
     updated_at: datetime
+    class_date: Optional[date] = None  # Fecha de la clase (calculada, no persistida)
 
     # Permite leer desde objetos SQLAlchemy
     model_config = {"from_attributes": True}

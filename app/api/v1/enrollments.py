@@ -1292,7 +1292,11 @@ async def get_credit_transactions(
         404: Si la inscripción no existe
         403: Si la inscripción no pertenece al profesor
     """
-    from app.models.credit_transaction import CreditTransaction
+    from app.models.credit_transaction import CreditTransaction, CreditTransactionReferenceType
+    from app.models.attendance import Attendance
+    from app.models.class_model import Class as ClassModel
+    from sqlalchemy.orm import aliased
+    from sqlalchemy import case, literal
 
     # Verificar que la inscripción existe y pertenece al profesor
     enrollment_obj = await enrollment.get(db, enrollment_id)
@@ -1317,13 +1321,41 @@ async def get_credit_transactions(
                 detail="No tienes permiso para ver esta inscripción"
             )
 
-    # Obtener transacciones ordenadas por created_at DESC
+    # Query con JOIN condicional para resolver class_date según reference_type
+    ClassAlias = aliased(ClassModel)
+    AttendanceAlias = aliased(Attendance)
+
+    # Subquery para resolver class_date:
+    # - Si reference_type='attendance': Attendance → Class.date
+    # - Si reference_type='class': Class.date directo
+    # - Si reference_type=null (MANUAL_ADJUSTMENT): NULL
     result = await db.execute(
-        select(CreditTransaction)
+        select(
+            CreditTransaction,
+            case(
+                (CreditTransaction.reference_type == CreditTransactionReferenceType.ATTENDANCE,
+                 select(ClassAlias.date)
+                 .where(AttendanceAlias.id == CreditTransaction.reference_id)
+                 .where(AttendanceAlias.class_id == ClassAlias.id)
+                 .scalar_subquery()),
+                (CreditTransaction.reference_type == CreditTransactionReferenceType.CLASS,
+                 select(ClassAlias.date)
+                 .where(ClassAlias.id == CreditTransaction.reference_id)
+                 .scalar_subquery()),
+                else_=literal(None)
+            ).label('class_date')
+        )
         .where(CreditTransaction.enrollment_id == enrollment_id)
         .order_by(CreditTransaction.created_at.desc())
     )
-    transactions = result.scalars().all()
+    rows = result.all()
+
+    # Construir respuesta con class_date agregado
+    transactions = []
+    for tx, class_date in rows:
+        resp = CreditTransactionResponse.model_validate(tx, from_attributes=True)
+        resp.class_date = class_date
+        transactions.append(resp)
 
     return transactions
 
