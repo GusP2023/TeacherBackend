@@ -57,6 +57,22 @@ async def apply(
     if enrollment.credits + amount < 0:
         raise ValueError(f"Créditos insuficientes. Balance actual: {enrollment.credits}, cambio solicitado: {amount}")
 
+    # Idempotency guard para reintentos repetidos del mismo cambio.
+    # Evita duplicar transacciones cuando la misma operación llega dos veces
+    # con la misma referencia (por ejemplo, un reintento de licencia/recuperación).
+    if reference_id is not None and reference_type is not None:
+        existing_result = await db.execute(
+            select(CreditTransaction).where(
+                CreditTransaction.enrollment_id == enrollment.id,
+                CreditTransaction.source_type == source_type,
+                CreditTransaction.reference_id == reference_id,
+                CreditTransaction.reference_type == reference_type,
+            )
+        )
+        existing_transaction = existing_result.scalar_one_or_none()
+        if existing_transaction is not None:
+            return existing_transaction
+
     enrollment.credits += amount
 
     transaction = CreditTransaction(
@@ -74,8 +90,11 @@ async def apply(
     try:
         await db.flush()
     except IntegrityError:
-        # Revert changes if transaction already exists (idempotency check via unique index)
+        # Si el duplicado ya existía en BD (por ejemplo, un reintento), revertimos
+        # el cambio local y limpiamos la sesión para que quede usable.
         enrollment.credits -= amount
+        await db.rollback()
+        await db.refresh(enrollment)
         return None
 
     return transaction
