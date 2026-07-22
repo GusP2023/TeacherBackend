@@ -1274,6 +1274,8 @@ async def check_schedule_availability(
 @router.get("/{enrollment_id}/credit-transactions", response_model=list[CreditTransactionResponse])
 async def get_credit_transactions(
     enrollment_id: int,
+    limit: int = Query(30, ge=1, le=100),
+    skip: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
@@ -1350,6 +1352,8 @@ async def get_credit_transactions(
         )
         .where(CreditTransaction.enrollment_id == enrollment_id)
         .order_by(CreditTransaction.created_at.desc())
+        .limit(limit)
+        .offset(skip)
     )
     rows = result.all()
 
