@@ -14,6 +14,7 @@ from app.models.student import Student
 from app.models.attendance import Attendance
 from app.models.credit_transaction import CreditTransaction, CreditTransactionSource
 from app.schemas.enrollment import EnrollmentCreate, EnrollmentUpdate
+from app.services import credit_service
 
 
 async def get(db: AsyncSession, enrollment_id: int) -> Enrollment | None:
@@ -85,28 +86,17 @@ async def update(
 
     # Manejar cambio de créditos con ledger
     if 'credits' in update_data:
-        old_credits = enrollment.credits
-        new_credits = update_data['credits']
-        delta = new_credits - old_credits
-
-        if delta != 0:
-            # Actualizar créditos
-            enrollment.credits = new_credits
-
-            # Insertar transacción en el ledger
-            credit_transaction = CreditTransaction(
-                enrollment_id=enrollment.id,
-                amount=delta,
-                source_type=CreditTransactionSource.MANUAL_ADJUSTMENT,
-                reference_type=None,
-                reference_id=None,
-                note=update_data.get('credits_note'),
-                created_by=teacher_id
-            )
-            db.add(credit_transaction)
-
-            # Remover credits_note de update_data para no intentar setearlo en enrollment
-            update_data.pop('credits_note', None)
+        new_credits = update_data.pop('credits')
+        note = update_data.pop('credits_note', None) or "Ajuste manual sin nota"
+        if teacher_id is None:
+            raise ValueError("teacher_id es requerido para ajustar créditos")
+        await credit_service.apply_manual(
+            db=db,
+            enrollment=enrollment,
+            new_credits=new_credits,
+            note=note,
+            created_by=teacher_id,
+        )
 
     # Aplicar otros cambios
     for field, value in update_data.items():

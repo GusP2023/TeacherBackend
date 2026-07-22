@@ -106,7 +106,7 @@ class BatchProcessor:
             elif op.type == "UPDATE_ENROLLMENT":
                 if not target_id: raise ValueError("ID requerido para UPDATE")
                 schema = EnrollmentUpdate(**payload_data)
-                await enrollment.update(self.db, target_id, schema)
+                await enrollment.update(self.db, target_id, schema, self.teacher_id)
                 result_id = target_id
             
             elif op.type == "DELETE_ENROLLMENT":

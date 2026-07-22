@@ -345,7 +345,10 @@ async def update_enrollment(
     old_enrolled_date = enrollment_obj.enrolled_date
     new_enrolled_date = enrollment_data.enrolled_date  # None si no cambió
 
-    updated_enrollment = await enrollment.update(db, enrollment_id, enrollment_data, current_teacher.id)
+    try:
+        updated_enrollment = await enrollment.update(db, enrollment_id, enrollment_data, current_teacher.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Enriquecer con teacher_name e instrument_name para la respuesta
     if updated_enrollment is not None:
