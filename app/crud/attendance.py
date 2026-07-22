@@ -251,7 +251,7 @@ async def update(
                 if enrollment:
                     # Caso 1: Cambia A license (otorgar crédito)
                     if old_status != AttendanceStatus.LICENSE and new_status == AttendanceStatus.LICENSE:
-                        await credit_service.apply(
+                        license_tx = await credit_service.apply(
                             db=db,
                             enrollment=enrollment,
                             amount=1,
@@ -259,6 +259,8 @@ async def update(
                             reference_id=attendance.id,
                             reference_type=CreditTransactionReferenceType.ATTENDANCE,
                         )
+                        if license_tx is None:
+                            raise ValueError("La licencia ya estaba activa para esta asistencia")
 
                     # Caso 2: Cambia DESDE license (quitar crédito)
                     elif old_status == AttendanceStatus.LICENSE and new_status != AttendanceStatus.LICENSE:
@@ -287,7 +289,7 @@ async def update(
                                 recovery_tx.consumed_credit_tx_id = None
 
                         try:
-                            await credit_service.apply(
+                            reversal_tx = await credit_service.apply(
                                 db=db,
                                 enrollment=enrollment,
                                 amount=-1,
@@ -295,8 +297,10 @@ async def update(
                                 reference_id=attendance.id,
                                 reference_type=CreditTransactionReferenceType.ATTENDANCE,
                             )
-                        except ValueError:
-                            raise ValueError("No se puede cambiar de 'license' porque el alumno ya usó los créditos")
+                            if reversal_tx is None:
+                                raise ValueError("La reversión de licencia ya estaba aplicada")
+                        except ValueError as exc:
+                            raise ValueError(str(exc)) from exc
     
     # Aplicar cambios
     for field, value in update_data.items():

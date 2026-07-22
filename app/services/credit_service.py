@@ -7,8 +7,10 @@ modificaciones directas dispersas en el código, insertando las transacciones
 históricas correspondientes y manejando la concurrencia/idempotencia.
 """
 
+import hashlib
+
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from app.models.enrollment import Enrollment
 from app.models.credit_transaction import (
@@ -16,6 +18,16 @@ from app.models.credit_transaction import (
     CreditTransactionSource,
     CreditTransactionReferenceType,
 )
+
+
+def _credit_advisory_lock_key(
+    enrollment_id: int,
+    source_type: CreditTransactionSource,
+    reference_id: int | None,
+) -> int:
+    payload = f"{enrollment_id}:{source_type.value}:{reference_id or 0}".encode("utf-8")
+    digest = hashlib.blake2b(payload, digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
 
 
 async def apply(
@@ -57,21 +69,77 @@ async def apply(
     if enrollment.credits + amount < 0:
         raise ValueError(f"Créditos insuficientes. Balance actual: {enrollment.credits}, cambio solicitado: {amount}")
 
-    # Idempotency guard para reintentos repetidos del mismo cambio.
-    # Evita duplicar transacciones cuando la misma operación llega dos veces
-    # con la misma referencia (por ejemplo, un reintento de licencia/recuperación).
     if reference_id is not None and reference_type is not None:
-        existing_result = await db.execute(
-            select(CreditTransaction).where(
-                CreditTransaction.enrollment_id == enrollment.id,
-                CreditTransaction.source_type == source_type,
-                CreditTransaction.reference_id == reference_id,
-                CreditTransaction.reference_type == reference_type,
-            )
+        lock_key = _credit_advisory_lock_key(enrollment.id, source_type, reference_id)
+        lock_result = await db.execute(
+            text("SELECT pg_try_advisory_xact_lock(:lock_key)"),
+            {"lock_key": lock_key},
         )
-        existing_transaction = existing_result.scalar_one_or_none()
-        if existing_transaction is not None:
-            return existing_transaction
+        lock_acquired = lock_result.scalar()
+        if not lock_acquired:
+            # Si el lock ya está tomado por otra transacción concurrente, seguimos con
+            # la validación por neto y dejamos que la transacción ganadora decida.
+            pass
+
+        opening_to_closing = {
+            CreditTransactionSource.LICENSE: CreditTransactionSource.LICENSE_REVERSAL,
+            CreditTransactionSource.RECOVERY_CLASS: CreditTransactionSource.RECOVERY_CLASS_DELETED,
+        }
+        closing_to_opening = {closing: opening for opening, closing in opening_to_closing.items()}
+
+        if source_type in opening_to_closing:
+            opening_source = source_type
+            closing_source = opening_to_closing[source_type]
+
+            opening_result = await db.execute(
+                select(CreditTransaction).where(
+                    CreditTransaction.enrollment_id == enrollment.id,
+                    CreditTransaction.source_type == opening_source,
+                    CreditTransaction.reference_id == reference_id,
+                    CreditTransaction.reference_type == reference_type,
+                )
+            )
+            opening_transactions = opening_result.scalars().all()
+
+            closing_result = await db.execute(
+                select(CreditTransaction).where(
+                    CreditTransaction.enrollment_id == enrollment.id,
+                    CreditTransaction.source_type == closing_source,
+                    CreditTransaction.reference_id == reference_id,
+                    CreditTransaction.reference_type == reference_type,
+                )
+            )
+            closing_transactions = closing_result.scalars().all()
+
+            if len(opening_transactions) > len(closing_transactions):
+                return None
+
+        elif source_type in closing_to_opening:
+            closing_source = source_type
+            opening_source = closing_to_opening[source_type]
+
+            closing_result = await db.execute(
+                select(CreditTransaction).where(
+                    CreditTransaction.enrollment_id == enrollment.id,
+                    CreditTransaction.source_type == closing_source,
+                    CreditTransaction.reference_id == reference_id,
+                    CreditTransaction.reference_type == reference_type,
+                )
+            )
+            closing_transactions = closing_result.scalars().all()
+
+            opening_result = await db.execute(
+                select(CreditTransaction).where(
+                    CreditTransaction.enrollment_id == enrollment.id,
+                    CreditTransaction.source_type == opening_source,
+                    CreditTransaction.reference_id == reference_id,
+                    CreditTransaction.reference_type == reference_type,
+                )
+            )
+            opening_transactions = opening_result.scalars().all()
+
+            if len(closing_transactions) > len(opening_transactions):
+                return None
 
     enrollment.credits += amount
 
