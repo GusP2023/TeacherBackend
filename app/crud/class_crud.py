@@ -219,8 +219,9 @@ async def create_recovery(
     # Un crédito está disponible si no existe ninguna RECOVERY_CLASS con consumed_credit_tx_id apuntando a él
     from app.models.credit_transaction import CreditTransaction
 
-    # Alias para la tabla de recovery transactions
+    # Alias para las tablas de transacciones relacionadas
     RecoveryTx = aliased(CreditTransaction, name='recovery_tx')
+    ReversalTx = aliased(CreditTransaction, name='reversal_tx')
 
     # Subquery: verificar si existe alguna RECOVERY_CLASS que consuma este crédito
     consumed_subq = exists(
@@ -228,6 +229,17 @@ async def create_recovery(
         .where(
             RecoveryTx.consumed_credit_tx_id == CreditTransaction.id,
             RecoveryTx.source_type == CreditTransactionSource.RECOVERY_CLASS
+        )
+    )
+
+    # Subquery: verificar si existe una LICENSE_REVERSAL posterior para la misma licencia
+    reversed_subq = exists(
+        select(1)
+        .where(
+            ReversalTx.enrollment_id == CreditTransaction.enrollment_id,
+            ReversalTx.source_type == CreditTransactionSource.LICENSE_REVERSAL,
+            ReversalTx.reference_id == CreditTransaction.reference_id,
+            ReversalTx.created_at >= CreditTransaction.created_at
         )
     )
 
@@ -241,7 +253,14 @@ async def create_recovery(
             ]),
             CreditTransaction.amount > 0,  # Solo créditos positivos
             # No está consumido por ninguna RECOVERY_CLASS
-            not_(consumed_subq)
+            not_(consumed_subq),
+            # Si es LICENSE, no debe haber sido revertida posteriormente
+            not_(
+                and_(
+                    CreditTransaction.source_type == CreditTransactionSource.LICENSE,
+                    reversed_subq
+                )
+            )
         )
         .order_by(CreditTransaction.created_at.asc())
     )
