@@ -411,13 +411,16 @@ async def delete_recovery(db: AsyncSession, class_id: int) -> bool:
     # Buscar la transacción RECOVERY_CLASS original para liberar el consumed_credit_tx_id
     from app.models.credit_transaction import CreditTransaction
     recovery_tx_result = await db.execute(
-        select(CreditTransaction).where(
+        select(CreditTransaction)
+        .where(
             CreditTransaction.enrollment_id == class_obj.enrollment_id,
             CreditTransaction.source_type == CreditTransactionSource.RECOVERY_CLASS,
-            CreditTransaction.reference_id == class_obj.id
+            CreditTransaction.reference_id == class_obj.id,
         )
+        .order_by(CreditTransaction.created_at.desc())
+        .limit(1)
     )
-    recovery_tx = recovery_tx_result.scalar_one_or_none()
+    recovery_tx = recovery_tx_result.scalars().first()
 
     # Liberar el consumed_credit_tx_id si existe
     if recovery_tx and recovery_tx.consumed_credit_tx_id is not None:

@@ -156,13 +156,16 @@ async def delete(db: AsyncSession, attendance_id: int) -> bool:
                 # Buscar la transacción LICENSE original para liberar el consumed_credit_tx_id
                 from app.models.credit_transaction import CreditTransaction
                 license_tx_result = await db.execute(
-                    select(CreditTransaction).where(
+                    select(CreditTransaction)
+                    .where(
                         CreditTransaction.enrollment_id == class_obj.enrollment_id,
                         CreditTransaction.source_type == CreditTransactionSource.LICENSE,
-                        CreditTransaction.reference_id == attendance.id
+                        CreditTransaction.reference_id == attendance.id,
                     )
+                    .order_by(CreditTransaction.created_at.desc())
+                    .limit(1)
                 )
-                license_tx = license_tx_result.scalar_one_or_none()
+                license_tx = license_tx_result.scalars().first()
 
                 # Liberar el consumed_credit_tx_id si existe (algun RECOVERY_CLASS consumió esta licencia)
                 if license_tx:
@@ -267,13 +270,16 @@ async def update(
                         # Buscar la transacción LICENSE original para liberar el consumed_credit_tx_id
                         from app.models.credit_transaction import CreditTransaction
                         license_tx_result = await db.execute(
-                            select(CreditTransaction).where(
+                            select(CreditTransaction)
+                            .where(
                                 CreditTransaction.enrollment_id == class_obj.enrollment_id,
                                 CreditTransaction.source_type == CreditTransactionSource.LICENSE,
-                                CreditTransaction.reference_id == attendance.id
+                                CreditTransaction.reference_id == attendance.id,
                             )
+                            .order_by(CreditTransaction.created_at.desc())
+                            .limit(1)
                         )
-                        license_tx = license_tx_result.scalar_one_or_none()
+                        license_tx = license_tx_result.scalars().first()
 
                         # Liberar el consumed_credit_tx_id si existe (algun RECOVERY_CLASS consumió esta licencia)
                         if license_tx:
