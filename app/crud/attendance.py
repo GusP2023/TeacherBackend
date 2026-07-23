@@ -167,9 +167,8 @@ async def delete(db: AsyncSession, attendance_id: int) -> bool:
                 )
                 license_tx = license_tx_result.scalars().first()
 
-                # Liberar el consumed_credit_tx_id si existe (algun RECOVERY_CLASS consumió esta licencia)
+                # Verificar si algún RECOVERY_CLASS consumió esta licencia
                 if license_tx:
-                    # Buscar RECOVERY_CLASS que consumió esta licencia y liberarla
                     recovery_tx_result = await db.execute(
                         select(CreditTransaction).where(
                             CreditTransaction.consumed_credit_tx_id == license_tx.id,
@@ -178,7 +177,7 @@ async def delete(db: AsyncSession, attendance_id: int) -> bool:
                     )
                     recovery_tx = recovery_tx_result.scalar_one_or_none()
                     if recovery_tx:
-                        recovery_tx.consumed_credit_tx_id = None
+                        raise ValueError("No se puede eliminar asistencia 'license' porque el alumno ya usó los créditos")
 
                 try:
                     await credit_service.apply(
@@ -281,9 +280,8 @@ async def update(
                         )
                         license_tx = license_tx_result.scalars().first()
 
-                        # Liberar el consumed_credit_tx_id si existe (algun RECOVERY_CLASS consumió esta licencia)
+                        # Verificar si algún RECOVERY_CLASS consumió esta licencia
                         if license_tx:
-                            # Buscar RECOVERY_CLASS que consumió esta licencia y liberarla
                             recovery_tx_result = await db.execute(
                                 select(CreditTransaction).where(
                                     CreditTransaction.consumed_credit_tx_id == license_tx.id,
@@ -292,7 +290,7 @@ async def update(
                             )
                             recovery_tx = recovery_tx_result.scalar_one_or_none()
                             if recovery_tx:
-                                recovery_tx.consumed_credit_tx_id = None
+                                raise ValueError("No se puede eliminar asistencia 'license' porque el alumno ya usó los créditos")
 
                         try:
                             reversal_tx = await credit_service.apply(
