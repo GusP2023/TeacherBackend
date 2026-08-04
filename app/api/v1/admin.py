@@ -1402,18 +1402,6 @@ async def get_dashboard(
     )
     pending_credits = pending_credits_result.scalar_one() or 0
 
-    overdue_suspensions_result = await db.execute(
-        select(func.count())
-        .select_from(Enrollment)
-        .join(Teacher, Enrollment.teacher_id == Teacher.id)
-        .where(
-            Teacher.organization_id == org_id,
-            Enrollment.status == EnrollmentStatus.SUSPENDED,
-            Enrollment.suspended_until < today,
-        )
-    )
-    overdue_suspensions = overdue_suspensions_result.scalar_one() or 0
-
     alerts: list[DashboardAlert] = []
     if overdue_classes > 0:
         alerts.append(DashboardAlert(
@@ -1435,13 +1423,6 @@ async def get_dashboard(
             severity="warning",
             count=pending_credits,
             label=f"{pending_credits} alumno{'s' if pending_credits != 1 else ''} con créditos de recuperación sin usar",
-        ))
-    if overdue_suspensions > 0:
-        alerts.append(DashboardAlert(
-            type="overdue_suspensions",
-            severity="warning",
-            count=overdue_suspensions,
-            label=f"{overdue_suspensions} suspensión{'es' if overdue_suspensions != 1 else ''} vencida{'s' if overdue_suspensions != 1 else ''} sin reactivar",
         ))
 
     teachers_result = await db.execute(

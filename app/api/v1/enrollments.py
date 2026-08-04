@@ -561,31 +561,13 @@ async def suspend_enrollment_put(
             detail="El enrollment ya está suspendido"
         )
 
-    # Validar fechas
-    if data.suspended_until and data.suspended_until < data.suspended_at:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="La fecha 'hasta' debe ser mayor o igual a la fecha 'desde'"
-        )
-
     # Validar conflictos con asistencias
     conflicting_dates = await validate_suspension(
         db,
         enrollment_id,
         data.suspended_at,
-        data.suspended_until
+        None
     )
-
-    if conflicting_dates:
-        # Formatear fechas para mensaje
-        dates_str = ", ".join([d.strftime('%d-%b') for d in conflicting_dates[:3]])
-        if len(conflicting_dates) > 3:
-            dates_str += f" (y {len(conflicting_dates) - 3} más)"
-
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"No se puede suspender. Las siguientes clases tienen asistencia marcada: {dates_str}"
-        )
 
     if conflicting_dates:
         # Formatear fechas para mensaje
@@ -600,11 +582,11 @@ async def suspend_enrollment_put(
 
     # Ejecutar suspensión
     try:
-        result = await enrollment.suspend_enrollment(
+        result = await suspend_enroll_crud(
             db,
             enrollment_id,
             data.suspended_at,
-            data.suspended_until,
+            None,
             data.reason
         )
 
@@ -614,7 +596,7 @@ async def suspend_enrollment_put(
                 "id": result.id,
                 "status": result.status.value,
                 "suspended_at": result.suspended_at,
-                "suspended_until": result.suspended_until,
+                "suspended_until": None,
                 "message": "Enrollment suspendido exitosamente"
             }
         else:
@@ -674,7 +656,7 @@ async def suspend_enrollment_endpoint(
         db,
         enrollment_id,
         reason=request.reason,
-        until_date=request.suspended_until
+        until_date=None
     )
     
     if "error" in result and result["enrollment"] is None:

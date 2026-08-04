@@ -169,7 +169,7 @@ async def suspend(
     enrollment.status = EnrollmentStatus.SUSPENDED
     enrollment.suspended_at = today
     enrollment.suspended_reason = reason
-    enrollment.suspended_until = until_date
+    enrollment.suspended_until = None
     
     # 2. ELIMINAR clases futuras (físicamente, no cancelar)
     # Solo eliminar clases con status='scheduled' y fecha >= hoy
@@ -728,10 +728,10 @@ async def validate_suspension(
     db: AsyncSession,
     enrollment_id: int,
     suspended_at: date,
-    suspended_until: date | None
+    suspended_until: date | None = None
 ) -> list[date]:
     """Valida que no haya clases con asistencia en el rango de suspensión."""
-    end_date = suspended_until if suspended_until else date(9999, 12, 31)
+    end_date = date(9999, 12, 31)
 
     result = await db.execute(
         select(Class)
@@ -753,8 +753,8 @@ async def suspend_enrollment(
     db: AsyncSession,
     enrollment_id: int,
     suspended_at: date,
-    suspended_until: date | None,
-    reason: str | None
+    suspended_until: date | None = None,
+    reason: str | None = None
 ) -> Enrollment | None:
     """Suspende un enrollment y elimina clases regulares futuras."""
     from app.models.suspension_history import SuspensionHistory
@@ -769,7 +769,7 @@ async def suspend_enrollment(
 
     enrollment.status = EnrollmentStatus.SUSPENDED
     enrollment.suspended_at = suspended_at
-    enrollment.suspended_until = suspended_until
+    enrollment.suspended_until = None
     enrollment.suspended_reason = reason
 
     schedules_result = await db.execute(
@@ -778,7 +778,7 @@ async def suspend_enrollment(
     for schedule in schedules_result.scalars().all():
         schedule.active = False
 
-    end_date = suspended_until if suspended_until else date(9999, 12, 31)
+    end_date = date(9999, 12, 31)
 
     classes_result = await db.execute(
         select(Class).where(
@@ -796,7 +796,7 @@ async def suspend_enrollment(
     history = SuspensionHistory(
         enrollment_id=enrollment_id,
         suspended_at=suspended_at,
-        suspended_until=suspended_until,
+        suspended_until=None,
         reason=reason
     )
     db.add(history)
