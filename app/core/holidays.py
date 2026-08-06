@@ -84,6 +84,7 @@ HOLIDAYS_2026 = [
 
     # Agosto
     date(2026, 8, 6),   # Día de la Independencia de Bolivia
+    date(2026, 8, 7),   # Día de la Independencia de Bolivia
 
     # Noviembre
     date(2026, 11, 2),  # Día de Todos los Santos
