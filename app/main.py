@@ -177,9 +177,12 @@ app.add_exception_handler(
 # CONFIGURAR CORS
 # ========================================
 
+_extra_web_origins = ["http://localhost:8081", "http://localhost:19006"]
+cors_origins = list(dict.fromkeys(settings.BACKEND_CORS_ORIGINS + _extra_web_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
