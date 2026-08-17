@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.security import get_current_teacher
+from app.core.security import get_current_teacher, require_permission
 from app.crud import student
 from app.models.class_model import Class, ClassStatus, ClassType
 from app.models.enrollment import Enrollment
@@ -71,7 +71,7 @@ async def list_students(
 async def create_student(
     student_data: StudentCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.create"))
 ):
     """
     Crear un alumno nuevo
@@ -269,7 +269,7 @@ async def update_student(
     student_id: int,
     student_data: StudentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_personal"))
 ):
     """
     Actualizar un alumno existente
@@ -330,7 +330,7 @@ async def update_student(
 async def delete_student(
     student_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.delete"))
 ):
     """
     Eliminar un alumno FÍSICAMENTE (hard-delete)

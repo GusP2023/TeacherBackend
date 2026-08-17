@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_teacher
+from app.core.security import get_current_teacher, require_permission
 from app.crud import attendance, class_crud
 from app.models.teacher import Teacher
 from app.schemas.attendance import AttendanceCreate, AttendanceUpdate, AttendanceResponse
@@ -84,7 +84,7 @@ async def get_class_attendance(
 async def mark_attendance(
     attendance_data: AttendanceCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("classes.mark_attendance"))
 ):
     """
     Marcar asistencia para una clase
@@ -197,7 +197,7 @@ async def get_attendance(
 async def delete_attendance(
     attendance_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("classes.mark_attendance"))
 ):
     """
     Eliminar una asistencia
@@ -267,7 +267,7 @@ async def update_attendance(
     attendance_id: int,
     attendance_data: AttendanceUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("classes.mark_attendance"))
 ):
     """
     Actualizar una asistencia existente

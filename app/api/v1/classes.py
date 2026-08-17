@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import date
 
 from app.core.database import get_db
-from app.core.security import get_current_teacher
+from app.core.security import get_current_teacher, require_permission
 from app.crud import class_crud, enrollment
 from app.models.teacher import Teacher
 from app.schemas.class_schema import ClassCreate, ClassUpdate, ClassResponse
@@ -88,7 +88,7 @@ async def get_classes_by_date_range(
 async def create_class(
     class_data: ClassCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_schedule"))
 ):
     """
     Crear una clase nueva
@@ -157,7 +157,7 @@ async def create_class(
 async def create_recovery_class(
     class_data: ClassCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("classes.create_recovery"))
 ):
     """
     Crear una clase de recuperación
@@ -277,7 +277,7 @@ async def update_class(
     class_id: int,
     class_data: ClassUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_schedule"))
 ):
     """
     Actualizar una clase existente
@@ -343,7 +343,7 @@ async def update_class(
 async def cancel_class(
     class_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("classes.delete"))
 ):
     """
     Cancelar una clase
@@ -399,7 +399,7 @@ async def cancel_class(
 async def delete_recovery_class(
     class_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("classes.delete"))
 ):
     """
     Eliminar una clase de recuperación (físicamente)

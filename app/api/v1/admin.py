@@ -491,7 +491,7 @@ def _build_bp_response(bp: BillingPeriod, amount_paid: Decimal,
 async def revert_personnel_payment(
     payment_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_payroll")),
 ):
     """
     Revierte un PersonnelPayment de status=paid a status=pending.
@@ -655,7 +655,7 @@ async def generate_billing_periods_endpoint(
     year:  int | None = Query(None, description="Año del período. Default: año actual"),
     month: int | None = Query(None, description="Mes del período (1-12). Default: mes actual"),
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_billing")),
 ):
     """
     Genera un BillingPeriod por cada Enrollment activo de la organización
@@ -761,7 +761,7 @@ async def list_billing_periods(
 async def create_billing_period(
     data: BillingPeriodCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_billing")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(status_code=400, detail="Sin organización asociada.")
@@ -857,7 +857,7 @@ async def update_billing_period(
     billing_period_id: int,
     data: BillingPeriodUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_billing")),
 ):
     """
     Edita due_date o notas de un BillingPeriod.
@@ -924,7 +924,7 @@ async def update_billing_period(
 async def waive_billing_period(
     billing_period_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_billing")),
 ):
     """
     Marca un BillingPeriod como waived (condonado).
@@ -979,7 +979,7 @@ async def waive_billing_period(
 async def delete_billing_period(
     billing_period_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_billing")),
 ):
     """
     Elimina un BillingPeriod y todos sus pagos asociados (cascade).
@@ -1028,7 +1028,7 @@ async def delete_billing_period(
 async def create_payment(
     data: PaymentCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_billing")),
 ):
     """
     Registra un pago recibido de una familia.
@@ -1183,7 +1183,7 @@ async def list_payments(
 async def delete_payment(
     payment_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_billing")),
 ):
     """
     Elimina un pago registrado por error.
@@ -1523,16 +1523,25 @@ _PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     "students.edit_schedule":     ("Editar horarios",          "Puede modificar los horarios de clase del alumno"),
     "students.suspend":           ("Suspender/reactivar",      "Puede suspender o reactivar a un alumno"),
     "students.delete":            ("Eliminar alumnos",         "Puede eliminar alumnos del sistema (acción irreversible)"),
+    "students.manage_enrollment": ("Gestión administrativa de inscripciones", "Puede suspender, reactivar, retirar y generar matrículas de inscripciones"),
     "classes.mark_attendance":    ("Marcar asistencia",        "Puede registrar asistencia, ausencias y licencias en las clases"),
     "classes.create_recovery":    ("Crear recuperaciones",     "Puede programar clases de recuperación"),
     "classes.delete":             ("Eliminar clases",          "Puede eliminar clases del calendario"),
     "finances.view_own":          ("Ver sus finanzas",         "Puede ver sus propias tarifas y resumen financiero"),
     "finances.view_all":          ("Ver finanzas globales",    "Puede ver las finanzas de todos los profesores"),
+    "finances.manage_billing":    ("Gestionar facturación y cobros", "Puede generar cuotas, registrar cobros, condonar y anular pagos"),
+    "finances.manage_payroll":    ("Gestionar liquidaciones de personal", "Puede calcular, generar, pagar y revertir liquidaciones de sueldos"),
+    "finances.manage_expenses":   ("Gestionar gastos operativos", "Puede registrar, editar y eliminar gastos de la institución"),
+    "finances.manage_discounts":  ("Gestionar descuentos",     "Puede crear, editar y anular descuentos y becas en inscripciones"),
     "org.manage_users":           ("Gestionar usuarios",       "Puede ver y modificar las cuentas de otros miembros"),
     "org.invite_teacher":         ("Invitar miembros",         "Puede enviar invitaciones para unirse a la organización"),
     "org.change_teacher_role":    ("Cambiar roles",            "Puede cambiar el rol de otros miembros"),
     "org.configure_permissions":  ("Configurar permisos",      "Puede modificar los permisos de los roles"),
     "org.reset_total":            ("Reset total",              "Puede ejecutar un reset completo de datos (acción extrema)"),
+    "org.manage_branches":        ("Gestionar sucursales y salas", "Puede crear, editar y configurar sucursales, horarios comerciales y salas"),
+    "org.manage_events":          ("Gestionar eventos",        "Puede crear, editar y eliminar eventos institucionales y recitales"),
+    "org.manage_availability":    ("Gestionar disponibilidad docente", "Puede configurar los bloques de disponibilidad horaria de los profesores"),
+    "org.manage_room_assignments": ("Asignar salas a horarios", "Puede asignar y reasignar salas físicas a los horarios de clases"),
 }
 
 
@@ -1663,7 +1672,7 @@ class BranchUpdate(BaseModel):
 async def create_branch(
     data: BranchCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_branches")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -1716,7 +1725,7 @@ async def update_branch(
     branch_id: int,
     data: BranchUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_branches")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -1793,7 +1802,7 @@ async def upsert_branch_hours(
     branch_id: int,
     data: list[BranchHourItem],
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_branches")),
 ):
     result = await db.execute(
         select(Branch).where(
@@ -1870,7 +1879,7 @@ async def create_room(
     branch_id: int,
     data: RoomCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_branches")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -1997,7 +2006,7 @@ async def update_room(
     room_id: int,
     data: RoomUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_branches")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -2076,7 +2085,7 @@ async def update_room(
 async def delete_room(
     room_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_branches")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -2136,7 +2145,7 @@ async def delete_room(
 async def delete_branch(
     branch_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_branches")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -2254,7 +2263,7 @@ async def update_schedule_room(
     schedule_id: int,
     data: ScheduleRoomAssign,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_room_assignments")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -2637,7 +2646,7 @@ async def _load_students_for_organization(db: AsyncSession, student_ids: list[in
 async def create_event(
     data: EventCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_events")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -2800,7 +2809,7 @@ async def update_event(
     event_id: int,
     data: EventUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_events")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -2903,7 +2912,7 @@ async def update_event(
 async def delete_event(
     event_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_events")),
 ):
     if not current_teacher.organization_id:
         raise HTTPException(
@@ -3460,7 +3469,7 @@ async def create_teacher_availability(
     teacher_id: int,
     data: AvailabilityCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_availability")),
 ):
     """
     Crea un nuevo bloque de disponibilidad para un profesor.
@@ -3518,7 +3527,7 @@ async def update_teacher_availability(
     availability_id: int,
     data: AvailabilityUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_availability")),
 ):
     """
     Actualiza un bloque de disponibilidad.
@@ -3588,7 +3597,7 @@ async def delete_teacher_availability(
     teacher_id: int,
     availability_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("org.manage_availability")),
 ):
     """
     Elimina un bloque de disponibilidad.
@@ -3705,7 +3714,7 @@ async def list_availability(
 async def preview_personnel_payment(
     body: PersonnelPaymentPreviewRequest,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_payroll")),
 ):
     """
     Calcula clases cobrables y monto para un teacher en el período indicado.
@@ -3740,7 +3749,7 @@ async def preview_personnel_payment(
 async def create_personnel_payment(
     body: PersonnelPaymentCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_payroll")),
 ):
     """
     Crea un PersonnelPayment con status=pending.
@@ -3840,7 +3849,7 @@ async def update_personnel_payment(
     payment_id: int,
     body: PersonnelPaymentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_payroll")),
 ):
     """
     Edita adjustment y/o notes de un pago en status=pending.
@@ -3904,7 +3913,7 @@ async def pay_personnel_payment(
     payment_id: int,
     body: PersonnelPaymentPayRequest,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_payroll")),
 ):
     """
     Marca un pago pending como paid y registra los datos de la factura emitida
@@ -3947,7 +3956,7 @@ async def pay_personnel_payment(
 async def delete_personnel_payment(
     payment_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_payroll")),
 ):
     """
     Elimina una liquidación SOLO si está en status=pending.
@@ -4092,7 +4101,7 @@ async def create_fee_discount(
     enrollment_id: int,
     data: FeeDiscountCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_discounts")),
 ):
     """Crea un descuento de cuota (porcentaje o fijo) para un enrollment específico."""
     if not current_teacher.organization_id:
@@ -4171,7 +4180,7 @@ async def update_fee_discount(
     discount_id: int,
     data: FeeDiscountUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_discounts")),
 ):
     """Actualiza campos de un descuento de cuota existente."""
     if not current_teacher.organization_id:
@@ -4209,7 +4218,7 @@ async def update_fee_discount(
 async def delete_fee_discount(
     discount_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_discounts")),
 ):
     """Elimina un descuento de cuota."""
     if not current_teacher.organization_id:
@@ -4278,7 +4287,7 @@ class ExpenseResponse(BaseModel):
 async def create_expense(
     data: ExpenseCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_expenses")),
 ):
     """Registra un gasto operativo de la organización."""
     if not current_teacher.organization_id:
@@ -4342,7 +4351,7 @@ async def update_expense(
     expense_id: int,
     data: ExpenseUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_expenses")),
 ):
     """Actualiza campos de un gasto operativo existente."""
     if not current_teacher.organization_id:
@@ -4377,7 +4386,7 @@ async def update_expense(
 async def delete_expense(
     expense_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_expenses")),
 ):
     """Elimina un gasto operativo."""
     if not current_teacher.organization_id:
@@ -4564,7 +4573,7 @@ async def update_admin_enrollment(
     enrollment_id: int,
     data: AdminEnrollmentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("students.manage_enrollment")),
 ):
     """Actualiza campos editables de una inscripción (level, fees, credits)."""
     if not current_teacher.organization_id:
@@ -4629,7 +4638,7 @@ async def suspend_admin_enrollment(
     enrollment_id: int,
     data: AdminEnrollmentSuspend,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("students.manage_enrollment")),
 ):
     """Suspende una inscripción activa. No elimina clases futuras."""
     if not current_teacher.organization_id:
@@ -4676,7 +4685,7 @@ async def suspend_admin_enrollment(
 async def reactivate_admin_enrollment(
     enrollment_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("students.manage_enrollment")),
 ):
     """Reactiva una inscripción suspendida. No regenera clases."""
     if not current_teacher.organization_id:
@@ -4724,7 +4733,7 @@ async def withdraw_admin_enrollment(
     enrollment_id: int,
     data: AdminEnrollmentWithdraw,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("students.manage_enrollment")),
 ):
     """Retira una inscripción (cambia estado a withdrawn)."""
     if not current_teacher.organization_id:
@@ -4770,7 +4779,7 @@ async def withdraw_admin_enrollment(
 async def generate_matricula(
     enrollment_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+    current_teacher: Teacher = Depends(require_permission("students.manage_enrollment")),
 ):
     """
     Genera un BillingPeriod de tipo 'matricula' para la inscripción indicada.

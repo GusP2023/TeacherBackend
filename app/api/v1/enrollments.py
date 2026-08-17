@@ -19,7 +19,7 @@ import re
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.core.security import get_current_teacher
+from app.core.security import get_current_teacher, require_permission
 from app.crud import enrollment, student, instrument
 from app.models.teacher import Teacher
 from app.models.enrollment import Enrollment
@@ -123,7 +123,7 @@ async def list_enrollments(
 async def create_enrollment(
     enrollment_data: EnrollmentCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_enrollment"))
 ):
     """Crear una inscripción nueva"""
     # Validar que el alumno existe y pertenece al profesor
@@ -273,7 +273,7 @@ async def update_enrollment(
     enrollment_id: int,
     enrollment_data: EnrollmentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_enrollment"))
 ):
     """Actualizar una inscripción existente"""
     enrollment_obj = await enrollment.get(db, enrollment_id)
@@ -461,7 +461,7 @@ async def update_enrollment(
 async def delete_enrollment(
     enrollment_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_enrollment"))
 ):
     """Eliminar una inscripción FÍSICAMENTE (hard-delete)"""
     enrollment_obj = await enrollment.get(db, enrollment_id)
@@ -508,7 +508,7 @@ async def suspend_enrollment_put(
     enrollment_id: int,
     data: SuspendEnrollmentRequest,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.suspend"))
 ):
     """
     Suspende un enrollment desde una fecha específica.
@@ -618,7 +618,7 @@ async def suspend_enrollment_endpoint(
     enrollment_id: int,
     request: EnrollmentSuspendRequest,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.suspend"))
 ):
     """
     Suspender una inscripción temporalmente.
@@ -682,7 +682,7 @@ async def reactivate_enrollment_put(
     enrollment_id: int,
     data: ReactivateEnrollmentRequest,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.suspend"))
 ):
     """
     Reactiva un enrollment suspendido.
@@ -863,7 +863,7 @@ async def reactivate_enrollment(
     enrollment_id: int,
     request: EnrollmentReactivateRequest,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.suspend"))
 ):
     """
     Reactivar una inscripción suspendida.
@@ -937,7 +937,7 @@ async def reactivate_enrollment(
 async def withdraw_enrollment(
     enrollment_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.suspend"))
 ):
     """
     Retirar una inscripción definitivamente.
@@ -1004,7 +1004,7 @@ async def add_partial_recovery(
     enrollment_id: int,
     session: PartialRecoverySession,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_enrollment"))
 ):
     """Agregar una sesión parcial de recuperación al enrollment."""
     enrollment_obj = await enrollment.get(db, enrollment_id)
@@ -1098,7 +1098,7 @@ async def delete_partial_recovery(
     enrollment_id: int,
     session_index: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_enrollment"))
 ):
     """Eliminar una sesión parcial de recuperación por índice."""
     enrollment_obj = await enrollment.get(db, enrollment_id)
@@ -1157,7 +1157,7 @@ async def delete_partial_recovery(
 async def clear_partial_recoveries(
     enrollment_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_enrollment"))
 ):
     """Limpiar todas las sesiones parciales de recuperación."""
     enrollment_obj = await enrollment.get(db, enrollment_id)

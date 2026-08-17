@@ -11,7 +11,7 @@ from datetime import date, time as time_module
 from typing import Optional
 
 from app.core.database import get_db
-from app.core.security import get_current_teacher
+from app.core.security import get_current_teacher, require_permission
 from app.crud import schedule, enrollment
 from app.models.teacher import Teacher
 from app.models.class_model import ClassFormat
@@ -251,7 +251,7 @@ async def check_availability(
 async def create_schedule(
     schedule_data: ScheduleCreate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_schedule"))
 ):
     """
     Crear un horario nuevo (template recurrente)
@@ -413,7 +413,7 @@ async def update_schedule(
     schedule_id: int,
     schedule_data: ScheduleUpdate,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_schedule"))
 ):
     """
     Actualizar un horario existente
@@ -479,7 +479,7 @@ async def remove_schedule_with_date(
     schedule_id: int,
     data: RemoveScheduleRequest,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_schedule"))
 ):
     """
     Elimina un horario desde una fecha específica (soft-delete con histórico).
@@ -569,7 +569,7 @@ async def reactivate_schedule_endpoint(
     schedule_id: int,
     data: ReactivateScheduleRequest,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_schedule"))
 ):
     """
     Reactiva un horario inactivo creando uno nuevo con el mismo día/hora/duración.
@@ -627,7 +627,7 @@ async def reactivate_schedule_endpoint(
 async def delete_schedule(
     schedule_id: int,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_schedule"))
 ):
     """
     ⚠️ DEPRECADO: No usar este endpoint.
@@ -649,7 +649,7 @@ async def change_schedule_endpoint(
     schedule_id: int,
     data: ChangeScheduleRequest,
     db: AsyncSession = Depends(get_db),
-    current_teacher: Teacher = Depends(get_current_teacher)
+    current_teacher: Teacher = Depends(require_permission("students.edit_schedule"))
 ):
     """
     Cambia el horario de un alumno de forma atómica.
