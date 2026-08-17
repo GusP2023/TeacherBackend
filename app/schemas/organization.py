@@ -21,3 +21,8 @@ class OrganizationResponse(OrganizationBase):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class OrganizationUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+

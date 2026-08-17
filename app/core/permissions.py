@@ -58,6 +58,7 @@ PERMISSION_DEFAULTS: dict[str, dict[str, bool]] = {
         "org.manage_events":              True,
         "org.manage_availability":        True,
         "org.manage_room_assignments":    True,
+        "org.manage_organization":        True,
     },
 
     "teacher": {
@@ -88,6 +89,7 @@ PERMISSION_DEFAULTS: dict[str, dict[str, bool]] = {
         "org.manage_events":              False,
         "org.manage_availability":        False,
         "org.manage_room_assignments":    False,
+        "org.manage_organization":        False,
     },
 
     "coordinator": {
@@ -118,6 +120,7 @@ PERMISSION_DEFAULTS: dict[str, dict[str, bool]] = {
         "org.manage_events":              False,
         "org.manage_availability":        False,
         "org.manage_room_assignments":    False,
+        "org.manage_organization":        False,
     },
 
     "administrative": {
@@ -148,6 +151,7 @@ PERMISSION_DEFAULTS: dict[str, dict[str, bool]] = {
         "org.manage_events":              True,
         "org.manage_availability":        True,
         "org.manage_room_assignments":    True,
+        "org.manage_organization":        True,
     },
 }
 

@@ -55,6 +55,7 @@ from app.models.personnel_payment import PersonnelPayment, PersonnelPaymentStatu
 from app.models.fee_discount import FeeDiscount, DiscountType
 from app.models.expense import Expense, ExpenseCategory
 from app.models.organization import Organization
+from app.schemas.organization import OrganizationResponse, OrganizationUpdate
 from app.schemas.invitation import InvitationCreate, InvitationResponse
 from app.schemas.student import StudentResponse
 from app.schemas.teacher import TeacherResponse
@@ -1542,6 +1543,7 @@ _PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     "org.manage_events":          ("Gestionar eventos",        "Puede crear, editar y eliminar eventos institucionales y recitales"),
     "org.manage_availability":    ("Gestionar disponibilidad docente", "Puede configurar los bloques de disponibilidad horaria de los profesores"),
     "org.manage_room_assignments": ("Asignar salas a horarios", "Puede asignar y reasignar salas físicas a los horarios de clases"),
+    "org.manage_organization":    ("Gestionar organización",   "Puede ver y modificar la configuración general de la institución"),
 }
 
 
@@ -1614,6 +1616,95 @@ async def get_teacher_permissions(
         "custom_permissions": target.custom_permissions,
         "resolved": resolved,
     }
+
+
+# ────────────────────────────────────────────────────
+# ORGANIZACIÓN / CONFIGURACIÓN
+# ────────────────────────────────────────────────────
+
+
+@router.get(
+    "/organization",
+    response_model=OrganizationResponse,
+    summary="Obtener datos de la organización",
+)
+async def get_organization(
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_organization")),
+):
+    """
+    Retorna los datos de la organización del teacher autenticado.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    result = await db.execute(
+        select(Organization).where(Organization.id == current_teacher.organization_id)
+    )
+    org = result.scalar_one_or_none()
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organización no encontrada.",
+        )
+    return org
+
+
+@router.patch(
+    "/organization",
+    response_model=OrganizationResponse,
+    summary="Actualizar datos de la organización",
+)
+async def update_organization(
+    data: OrganizationUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_organization")),
+):
+    """
+    Actualiza datos de la organización.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tu cuenta no está asociada a ninguna organización.",
+        )
+
+    # Excepción de seguridad no delegable: el cambio de nombre de la escuela
+    # afecta la identidad institucional y solo puede ser realizado por el org_admin,
+    # independientemente de que otros roles (como administrative) tengan el permiso
+    # general 'org.manage_organization' habilitado.
+    if data.name is not None:
+        if current_teacher.role != "org_admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Solo el administrador de la organización puede cambiar el nombre de la escuela.",
+            )
+
+    result = await db.execute(
+        select(Organization).where(Organization.id == current_teacher.organization_id)
+    )
+    org = result.scalar_one_or_none()
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organización no encontrada.",
+        )
+
+    if data.name is not None:
+        stripped_name = data.name.strip()
+        if not stripped_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El nombre de la organización no puede estar vacío.",
+            )
+        org.name = stripped_name
+
+    await db.commit()
+    await db.refresh(org)
+    return org
 
 
 # ────────────────────────────────────────────────────
