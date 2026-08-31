@@ -109,7 +109,14 @@ class PaymentResponse(BaseModel):
     instrument_name: str
     created_at: datetime
     updated_at: datetime
+    billing_period: BillingPeriodResponse | None = None
     model_config = ConfigDict(from_attributes=True)
+
+
+class DeletePaymentResponse(BaseModel):
+    deleted: bool
+    payment_id: int
+    billing_period: BillingPeriodResponse | None = None
 
 
 class StudentBillingSummary(BaseModel):

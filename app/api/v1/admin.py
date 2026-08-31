@@ -65,7 +65,7 @@ from app.schemas.billing import (
     GenerateBillingPeriodsResponse, StudentBillingSummary,
     StudentBrief as BillingStudentBrief,
     EnrollmentBrief,
-    PaymentCreate, PaymentResponse,
+    PaymentCreate, PaymentResponse, DeletePaymentResponse,
 )
 from app.schemas.personnel_payment import (
     PersonnelPaymentPreviewRequest, PersonnelPaymentPreviewResponse,
@@ -1096,6 +1096,31 @@ async def create_payment(
     await db.commit()
     await db.refresh(payment)
 
+    billing_period_response = None
+    if data.billing_period_id is not None:
+        bp_result = await db.execute(
+            select(BillingPeriod)
+            .where(BillingPeriod.id == data.billing_period_id)
+            .options(
+                selectinload(BillingPeriod.enrollment).selectinload(Enrollment.teacher),
+                selectinload(BillingPeriod.enrollment).selectinload(Enrollment.student),
+                selectinload(BillingPeriod.enrollment).selectinload(Enrollment.instrument),
+            )
+        )
+        bp = bp_result.scalar_one_or_none()
+        if bp:
+            paid_result = await db.execute(
+                select(func.coalesce(func.sum(Payment.amount), 0))
+                .where(Payment.billing_period_id == bp.id)
+            )
+            amount_paid = Decimal(str(paid_result.scalar_one()))
+            teacher_name = (
+                bp.enrollment.teacher.name
+                if bp.enrollment and bp.enrollment.teacher
+                else "—"
+            )
+            billing_period_response = _build_bp_response(bp, amount_paid, teacher_name)
+
     student    = enrollment.student
     instrument = enrollment.instrument
 
@@ -1113,6 +1138,7 @@ async def create_payment(
         instrument_name=instrument.name if instrument else "—",
         created_at=payment.created_at,
         updated_at=payment.updated_at,
+        billing_period=billing_period_response,
     )
 
 
@@ -1179,6 +1205,7 @@ async def list_payments(
 
 @router.delete(
     "/payments/{payment_id}",
+    response_model=DeletePaymentResponse,
     summary="Eliminar un pago de alumno",
 )
 async def delete_payment(
@@ -1215,7 +1242,37 @@ async def delete_payment(
         await _recalculate_billing_status(db, billing_period_id)
 
     await db.commit()
-    return {"deleted": True, "payment_id": payment_id}
+
+    billing_period_response = None
+    if billing_period_id is not None:
+        bp_result = await db.execute(
+            select(BillingPeriod)
+            .where(BillingPeriod.id == billing_period_id)
+            .options(
+                selectinload(BillingPeriod.enrollment).selectinload(Enrollment.teacher),
+                selectinload(BillingPeriod.enrollment).selectinload(Enrollment.student),
+                selectinload(BillingPeriod.enrollment).selectinload(Enrollment.instrument),
+            )
+        )
+        bp = bp_result.scalar_one_or_none()
+        if bp:
+            paid_result = await db.execute(
+                select(func.coalesce(func.sum(Payment.amount), 0))
+                .where(Payment.billing_period_id == bp.id)
+            )
+            amount_paid = Decimal(str(paid_result.scalar_one()))
+            teacher_name = (
+                bp.enrollment.teacher.name
+                if bp.enrollment and bp.enrollment.teacher
+                else "—"
+            )
+            billing_period_response = _build_bp_response(bp, amount_paid, teacher_name)
+
+    return DeletePaymentResponse(
+        deleted=True,
+        payment_id=payment_id,
+        billing_period=billing_period_response,
+    )
 
 
 # ── DASHBOARD ──
