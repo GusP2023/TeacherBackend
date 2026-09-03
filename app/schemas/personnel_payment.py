@@ -1,6 +1,7 @@
 """Schemas Pydantic para PersonnelPayment"""
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -78,8 +79,16 @@ class PersonnelPaymentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PendingMonth(BaseModel):
+    year:   int
+    month:  int
+    reason: Literal['unpaid', 'no_classes']
+
+
 class PendingAlertTeacher(BaseModel):
-    id:           int
-    name:         str
-    payment_mode: str
+    id:             int
+    name:           str
+    payment_mode:   str
+    pending_months: list[PendingMonth] = []
+
     model_config = ConfigDict(from_attributes=True)

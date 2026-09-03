@@ -71,7 +71,7 @@ from app.schemas.personnel_payment import (
     PersonnelPaymentPreviewRequest, PersonnelPaymentPreviewResponse,
     PersonnelPaymentCreate, PersonnelPaymentUpdate,
     PersonnelPaymentPayRequest, PersonnelPaymentResponse,
-    PendingAlertTeacher,
+    PendingAlertTeacher, PendingMonth,
 )
 from app.api.v1.websocket import notify_data_change
 import logging
@@ -4138,38 +4138,48 @@ async def delete_personnel_payment(
 @router.get(
     "/personnel-payments/pending-alert",
     response_model=list[PendingAlertTeacher],
-    summary="Teachers activos sin pago generado en el mes anterior",
+    summary="Teachers activos con meses pendientes de liquidación",
 )
 async def personnel_payments_pending_alert(
-    year:  int | None = Query(None, description="Año a verificar. Default: mes anterior"),
-    month: int | None = Query(None, description="Mes a verificar (1-12). Default: mes anterior"),
+    months_back: int = Query(3, description="Meses hacia atrás a revisar: 3, 6 o 12"),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
     """
-    Devuelve los teachers activos que NO tienen ningún PersonnelPayment
-    cuyo period_from cae dentro del mes indicado.
-    Útil para alertar: "Faltan X profesores sin liquidación para este mes".
-    Default: verifica el mes anterior al actual.
+    Devuelve los teachers activos que tienen meses sin PersonnelPayment en la ventana
+    de months_back meses anteriores al mes actual.
+    Diferencia el motivo según payment_mode:
+    - monthly_fixed: 'unpaid'
+    - per_class / mixed: 'no_classes' si tuvo 0 clases cobrables, 'unpaid' si tuvo >0 clases cobrables.
     """
     if not current_teacher.organization_id:
         return []
 
-    today = date.today()
-    if year is None or month is None:
-        # Mes anterior
-        if today.month == 1:
-            check_year, check_month = today.year - 1, 12
-        else:
-            check_year, check_month = today.year, today.month - 1
-    else:
-        check_year, check_month = year, month
+    if months_back not in (3, 6, 12):
+        raise HTTPException(status_code=400, detail="months_back debe ser 3, 6 o 12")
 
-    month_start = date(check_year, check_month, 1)
-    if check_month == 12:
-        month_end = date(check_year + 1, 1, 1) - timedelta(days=1)
+    today = date.today()
+    cur_year = today.year
+    cur_month = today.month
+
+    # Ventana de meses: desde months_back meses atrás hasta el mes anterior al actual
+    months_to_check: list[tuple[int, int]] = []
+    for i in range(months_back, 0, -1):
+        month_idx = (cur_year * 12 + cur_month - 1) - i
+        y = month_idx // 12
+        m = (month_idx % 12) + 1
+        months_to_check.append((y, m))
+
+    if not months_to_check:
+        return []
+
+    first_y, first_m = months_to_check[0]
+    last_y, last_m = months_to_check[-1]
+    window_start = date(first_y, first_m, 1)
+    if last_m == 12:
+        window_end = date(last_y + 1, 1, 1) - timedelta(days=1)
     else:
-        month_end = date(check_year, check_month + 1, 1) - timedelta(days=1)
+        window_end = date(last_y, last_m + 1, 1) - timedelta(days=1)
 
     # Teachers activos de la organización
     teachers_result = await db.execute(
@@ -4179,22 +4189,60 @@ async def personnel_payments_pending_alert(
         )
     )
     all_teachers = teachers_result.scalars().all()
+    if not all_teachers:
+        return []
 
-    # Teachers que YA tienen un pago con period_from en ese mes
+    teacher_ids = [t.id for t in all_teachers]
+
+    # Pagos existentes en el rango de fechas
     paid_result = await db.execute(
-        select(PersonnelPayment.teacher_id).where(
-            PersonnelPayment.teacher_id.in_([t.id for t in all_teachers]),
-            PersonnelPayment.period_from >= month_start,
-            PersonnelPayment.period_from <= month_end,
+        select(PersonnelPayment.teacher_id, PersonnelPayment.period_from).where(
+            PersonnelPayment.teacher_id.in_(teacher_ids),
+            PersonnelPayment.period_from >= window_start,
+            PersonnelPayment.period_from <= window_end,
         )
     )
-    teachers_with_payment = {row[0] for row in paid_result.all()}
+    existing_payments = {
+        (row.teacher_id, row.period_from.year, row.period_from.month)
+        for row in paid_result.all()
+    }
 
-    return [
-        PendingAlertTeacher(id=t.id, name=t.name, payment_mode=t.payment_mode)
-        for t in all_teachers
-        if t.id not in teachers_with_payment
-    ]
+    results: list[PendingAlertTeacher] = []
+    for t in all_teachers:
+        pending_months: list[PendingMonth] = []
+        for y, m in months_to_check:
+            if (t.id, y, m) in existing_payments:
+                continue
+
+            month_start = date(y, m, 1)
+            if m == 12:
+                month_end = date(y + 1, 1, 1) - timedelta(days=1)
+            else:
+                month_end = date(y, m + 1, 1) - timedelta(days=1)
+
+            if t.payment_mode == "monthly_fixed":
+                reason = "unpaid"
+            else:
+                # per_class o mixed: verificar si tuvo clases cobrables con calculate_teacher_payment
+                calc = await calculate_teacher_payment(db, t, month_start, month_end)
+                classes_ind = calc.get("classes_individual_count") or 0
+                classes_grp = calc.get("classes_group_count") or 0
+                total_classes = classes_ind + classes_grp
+                reason = "no_classes" if total_classes == 0 else "unpaid"
+
+            pending_months.append(PendingMonth(year=y, month=m, reason=reason))
+
+        if pending_months:
+            results.append(
+                PendingAlertTeacher(
+                    id=t.id,
+                    name=t.name,
+                    payment_mode=t.payment_mode,
+                    pending_months=pending_months,
+                )
+            )
+
+    return results
 
 
 # ────────────────────────────────────────────────────
