@@ -52,6 +52,7 @@ from app.models.payment import Payment, PaymentConcept, PaymentMethod
 from app.services import credit_service
 from app.models.credit_transaction import CreditTransaction, CreditTransactionSource, CreditTransactionReferenceType
 from app.models.personnel_payment import PersonnelPayment, PersonnelPaymentStatus
+from app.models.personnel_payment_audit import PersonnelPaymentAudit
 from app.models.fee_discount import FeeDiscount, DiscountType
 from app.models.expense import Expense, ExpenseCategory
 from app.models.organization import Organization
@@ -71,6 +72,7 @@ from app.schemas.personnel_payment import (
     PersonnelPaymentPreviewRequest, PersonnelPaymentPreviewResponse,
     PersonnelPaymentCreate, PersonnelPaymentUpdate,
     PersonnelPaymentPayRequest, PersonnelPaymentResponse,
+    PersonnelPaymentAuditResponse,
     PendingAlertTeacher, PendingMonth,
 )
 from app.api.v1.websocket import notify_data_change
@@ -514,6 +516,17 @@ async def revert_personnel_payment(
         raise HTTPException(status_code=404, detail="Liquidación no encontrada.")
     if payment.status != PersonnelPaymentStatus.PAID:
         raise HTTPException(status_code=409, detail="Solo se pueden revertir liquidaciones pagadas.")
+
+    # Registrar auditoría con snapshot de los valores previos ANTES de limpiarlos
+    audit = PersonnelPaymentAudit(
+        payment_id=payment.id,
+        action="reverted",
+        performed_by_teacher_id=current_teacher.id,
+        invoice_number=payment.invoice_number,
+        invoice_date=payment.invoice_date,
+        invoice_notes=payment.invoice_notes,
+    )
+    db.add(audit)
 
     payment.status         = PersonnelPaymentStatus.PENDING
     payment.invoice_number = None
@@ -3930,6 +3943,11 @@ async def create_personnel_payment(
 
     total = calc["amount_calculated"] + body.adjustment
 
+    initial_status = PersonnelPaymentStatus.PAID if body.mark_as_paid else PersonnelPaymentStatus.PENDING
+    invoice_num = body.invoice_number.strip() if (body.mark_as_paid and body.invoice_number) else None
+    invoice_dt  = body.invoice_date if body.mark_as_paid else None
+    invoice_nts = body.invoice_notes if body.mark_as_paid else None
+
     payment = PersonnelPayment(
         teacher_id=teacher.id,
         period_from=body.period_from,
@@ -3937,10 +3955,26 @@ async def create_personnel_payment(
         adjustment=body.adjustment,
         notes=body.notes,
         total_amount=total,
-        status=PersonnelPaymentStatus.PENDING,
+        status=initial_status,
+        invoice_number=invoice_num,
+        invoice_date=invoice_dt,
+        invoice_notes=invoice_nts,
         **calc,
     )
     db.add(payment)
+
+    if body.mark_as_paid:
+        await db.flush()
+        audit = PersonnelPaymentAudit(
+            payment_id=payment.id,
+            action="paid",
+            performed_by_teacher_id=current_teacher.id,
+            invoice_number=payment.invoice_number,
+            invoice_date=payment.invoice_date,
+            invoice_notes=payment.invoice_notes,
+        )
+        db.add(audit)
+
     await db.commit()
     await db.refresh(payment)
     return payment
@@ -4089,6 +4123,16 @@ async def pay_personnel_payment(
     payment.invoice_date   = body.invoice_date
     payment.invoice_notes  = body.invoice_notes
 
+    audit = PersonnelPaymentAudit(
+        payment_id=payment.id,
+        action="paid",
+        performed_by_teacher_id=current_teacher.id,
+        invoice_number=payment.invoice_number,
+        invoice_date=payment.invoice_date,
+        invoice_notes=payment.invoice_notes,
+    )
+    db.add(audit)
+
     await db.commit()
     await db.refresh(payment)
     return payment
@@ -4130,6 +4174,62 @@ async def delete_personnel_payment(
     await db.delete(payment)
     await db.commit()
     return {"deleted": True, "payment_id": payment_id}
+
+
+# ────────────────────────────────────────────────────
+# GET /admin/personnel-payments/{payment_id}/audit
+# ────────────────────────────────────────────────────
+@router.get(
+    "/personnel-payments/{payment_id}/audit",
+    response_model=list[PersonnelPaymentAuditResponse],
+    summary="Historial de auditoría de una liquidación",
+)
+async def get_personnel_payment_audit(
+    payment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Devuelve el historial de auditoría de una liquidación (pagos y reversiones),
+    ordenado cronológicamente por created_at ascendente.
+    Requiere permiso org.manage_users.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(PersonnelPayment)
+        .join(Teacher, Teacher.id == PersonnelPayment.teacher_id)
+        .where(
+            PersonnelPayment.id == payment_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    payment = result.scalar_one_or_none()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Liquidación no encontrada.")
+
+    audit_result = await db.execute(
+        select(PersonnelPaymentAudit)
+        .options(selectinload(PersonnelPaymentAudit.performed_by))
+        .where(PersonnelPaymentAudit.payment_id == payment_id)
+        .order_by(PersonnelPaymentAudit.created_at.asc())
+    )
+    audit_entries = audit_result.scalars().all()
+
+    return [
+        PersonnelPaymentAuditResponse(
+            id=entry.id,
+            action=entry.action,
+            performed_by_teacher_id=entry.performed_by_teacher_id,
+            performed_by_teacher_name=entry.performed_by.name if entry.performed_by else "",
+            invoice_number=entry.invoice_number,
+            invoice_date=entry.invoice_date,
+            invoice_notes=entry.invoice_notes,
+            created_at=entry.created_at,
+        )
+        for entry in audit_entries
+    ]
 
 
 # ────────────────────────────────────────────────────

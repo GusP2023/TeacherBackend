@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from .room_override import RoomOverride
     from .event import Event
     from .personnel_payment import PersonnelPayment
+    from .personnel_payment_audit import PersonnelPaymentAudit
     from .teacher_availability import TeacherAvailability
 
 # Tabla de asociación Teacher <-> Instrument (many-to-many)
@@ -280,6 +281,11 @@ class Teacher(Base, TimestampMixin):
     personnel_payments: Mapped[List["PersonnelPayment"]] = relationship(
         back_populates="teacher",
         cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    personnel_payment_audits: Mapped[List["PersonnelPaymentAudit"]] = relationship(
+        back_populates="performed_by",
         lazy="noload"
     )
 

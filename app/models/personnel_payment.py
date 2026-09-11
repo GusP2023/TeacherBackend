@@ -19,6 +19,7 @@ from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .teacher import Teacher
+    from .personnel_payment_audit import PersonnelPaymentAudit
 
 
 class PersonnelPaymentStatus(str, enum.Enum):
@@ -74,6 +75,18 @@ class PersonnelPayment(Base, TimestampMixin):
     teacher: Mapped["Teacher"] = relationship(
         back_populates="personnel_payments", lazy="selectin"
     )
+
+    audit_entries: Mapped[list["PersonnelPaymentAudit"]] = relationship(
+        "PersonnelPaymentAudit",
+        back_populates="payment",
+        lazy="selectin",
+        order_by="PersonnelPaymentAudit.created_at",
+        cascade="all, delete-orphan",
+    )
+
+    @property
+    def revision_count(self) -> int:
+        return len(self.audit_entries)
 
     __table_args__ = (
         UniqueConstraint('teacher_id', 'period_from', 'period_to',

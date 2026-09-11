@@ -121,6 +121,7 @@ from .personnel_payment import (
     PersonnelPayment,
     PersonnelPaymentStatus
 )
+from .personnel_payment_audit import PersonnelPaymentAudit
 
 from .expense import (
     Expense,
@@ -167,6 +168,7 @@ __all__ = [
     "CreditTransactionReferenceType",
     "PersonnelPayment",
     "PersonnelPaymentStatus",
+    "PersonnelPaymentAudit",
     "Expense",
     "ExpenseCategory",
     

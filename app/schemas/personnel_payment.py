@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PersonnelPaymentPreviewRequest(BaseModel):
@@ -26,11 +26,24 @@ class PersonnelPaymentPreviewResponse(BaseModel):
 
 
 class PersonnelPaymentCreate(BaseModel):
-    teacher_id:  int
-    period_from: date
-    period_to:   date
-    adjustment:  Decimal = Field(default=Decimal("0.00"))
-    notes:       str | None = None
+    teacher_id:     int
+    period_from:    date
+    period_to:      date
+    adjustment:     Decimal = Field(default=Decimal("0.00"))
+    notes:          str | None = None
+    mark_as_paid:   bool = False
+    invoice_number: str | None = Field(None, max_length=100)
+    invoice_date:   date | None = None
+    invoice_notes:  str | None = None
+
+    @model_validator(mode='after')
+    def validate_mark_as_paid(self) -> 'PersonnelPaymentCreate':
+        if self.mark_as_paid:
+            if not self.invoice_number or not self.invoice_number.strip():
+                raise ValueError("invoice_number es requerido y no puede estar vacío cuando mark_as_paid=True")
+            if not self.invoice_date:
+                raise ValueError("invoice_date es requerido cuando mark_as_paid=True")
+        return self
 
 
 class PersonnelPaymentUpdate(BaseModel):
@@ -73,8 +86,22 @@ class PersonnelPaymentResponse(BaseModel):
     invoice_number:              str | None
     invoice_date:                date | None
     invoice_notes:               str | None
+    revision_count:              int = 0
     created_at:                  datetime
     updated_at:                  datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PersonnelPaymentAuditResponse(BaseModel):
+    id:                        int
+    action:                    Literal['paid', 'reverted']
+    performed_by_teacher_id:   int
+    performed_by_teacher_name: str
+    invoice_number:            str | None
+    invoice_date:              date | None
+    invoice_notes:             str | None
+    created_at:                datetime
 
     model_config = ConfigDict(from_attributes=True)
 
