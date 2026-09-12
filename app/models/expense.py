@@ -2,14 +2,14 @@
 Modelo Expense - Gasto operativo de la organización.
 Cubre costos sin persona asignada: alquiler, servicios, materiales, etc.
 Los sueldos del personal con acceso al sistema van en PersonnelPayment.
-El campo 'recurring' es informativo (recordatorio visual), NO auto-genera registros.
+La recurrencia de gastos se gestiona mediante el modelo RecurringExpenseTemplate.
 """
 
 from datetime import date
 from decimal import Decimal
-from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, Numeric, Boolean
+from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, Numeric
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 import enum
 
 from .base import Base, TimestampMixin
@@ -17,6 +17,8 @@ from .base import Base, TimestampMixin
 # Evita imports circulares
 if TYPE_CHECKING:
     from .organization import Organization
+    from .cash_account import CashAccount
+    from .recurring_expense_template import RecurringExpenseTemplate
 
 
 class ExpenseCategory(str, enum.Enum):
@@ -38,6 +40,17 @@ class ExpenseCategory(str, enum.Enum):
     OTRO = "otro"
 
 
+class ExpenseStatus(str, enum.Enum):
+    """
+    Estado del gasto operativo.
+    
+    - PENDING: Gasto registrado o generado pendiente de pago
+    - PAID: Gasto efectivamente pagado con cuenta y fecha de pago asignadas
+    """
+    PENDING = "pending"
+    PAID = "paid"
+
+
 class Expense(Base, TimestampMixin):
     """
     Modelo de Gasto Operativo.
@@ -46,8 +59,6 @@ class Expense(Base, TimestampMixin):
     Cubre costos sin persona asignada: alquiler, servicios, materiales, etc.
     Los sueldos del personal con acceso al sistema van en PersonnelPayment.
     
-    El campo 'recurring' es informativo (recordatorio visual), NO auto-genera registros.
-    
     Atributos principales:
         id: Identificador único del gasto
         organization_id: FK a la organización que registra el gasto
@@ -55,25 +66,16 @@ class Expense(Base, TimestampMixin):
         category: Categoría del gasto
         description: Descripción del gasto
         expense_date: Fecha del gasto
-        
-    Metadatos:
-        recurring: Indica si es un gasto habitual (solo informativo, no auto-genera registros)
+        status: Estado del gasto ('pending' o 'paid')
+        account_id: FK a la cuenta financiera desde donde se pagó (solo si paid)
+        paid_date: Fecha en que se efectuó el pago (solo si paid)
+        recurring_template_id: FK a la plantilla recurrente que originó el gasto
         receipt_note: Referencia del comprobante (número de factura, recibo, etc.)
         
     Relaciones:
         organization: Organización que registra el gasto
-        
-    Ejemplo de uso:
-        # Gasto de alquiler mensual
-        expense = Expense(
-            organization_id=1,
-            amount=1500.00,
-            category=ExpenseCategory.ALQUILER,
-            description="Alquiler mes de marzo 2025",
-            expense_date=date(2025, 3, 1),
-            recurring=True,
-            receipt_note="Factura #12345"
-        )
+        account: Cuenta de caja/banco desde la cual se realizó el pago
+        recurring_template: Plantilla origen si fue generado automáticamente
     """
     __tablename__ = "expenses"
 
@@ -127,17 +129,42 @@ class Expense(Base, TimestampMixin):
         index=True,
         comment="Fecha del gasto"
     )
+
+    # ========================================
+    # ESTADO Y PAGO
+    # ========================================
+
+    status: Mapped[ExpenseStatus] = mapped_column(
+        SQLEnum(ExpenseStatus, native_enum=False, values_callable=lambda x: [e.value for e in x]),
+        default=ExpenseStatus.PAID,
+        nullable=False,
+        index=True,
+        comment="Estado del gasto: pending o paid"
+    )
+
+    account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cash_accounts.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+        comment="ID de la cuenta financiera desde la que se pagó"
+    )
+
+    paid_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        comment="Fecha en que se realizó el pago"
+    )
+
+    recurring_template_id: Mapped[int | None] = mapped_column(
+        ForeignKey("recurring_expense_templates.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="ID de la plantilla de gasto recurrente de origen"
+    )
     
     # ========================================
     # METADATOS
     # ========================================
-    
-    recurring: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-        comment="Indica si es un gasto habitual (solo informativo, no auto-genera registros)"
-    )
     
     receipt_note: Mapped[str | None] = mapped_column(
         String(255),
@@ -154,6 +181,16 @@ class Expense(Base, TimestampMixin):
         lazy="selectin"
     )
 
+    account: Mapped[Optional["CashAccount"]] = relationship(
+        "CashAccount",
+        lazy="selectin"
+    )
+
+    recurring_template: Mapped[Optional["RecurringExpenseTemplate"]] = relationship(
+        "RecurringExpenseTemplate",
+        lazy="selectin"
+    )
+
     # ========================================
     # CONSTRAINTS
     # ========================================
@@ -167,4 +204,4 @@ class Expense(Base, TimestampMixin):
 
     def __repr__(self) -> str:
         """Representación string del objeto para debugging"""
-        return f"<Expense(id={self.id}, organization_id={self.organization_id}, amount={self.amount}, category='{self.category}')>"
+        return f"<Expense(id={self.id}, organization_id={self.organization_id}, amount={self.amount}, category='{self.category}', status='{self.status}')>"

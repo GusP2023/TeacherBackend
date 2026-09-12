@@ -54,7 +54,17 @@ from app.models.credit_transaction import CreditTransaction, CreditTransactionSo
 from app.models.personnel_payment import PersonnelPayment, PersonnelPaymentStatus
 from app.models.personnel_payment_audit import PersonnelPaymentAudit
 from app.models.fee_discount import FeeDiscount, DiscountType
-from app.models.expense import Expense, ExpenseCategory
+from app.models.expense import Expense, ExpenseCategory, ExpenseStatus
+from app.models.cash_account import CashAccount
+from app.models.account_movement import AccountMovement, AccountMovementType
+from app.models.recurring_expense_template import RecurringExpenseTemplate
+from app.schemas.cash_account import CashAccountCreate, CashAccountUpdate, CashAccountResponse
+from app.schemas.account_movement import AccountMovementCreate, AccountTransferCreate, AccountMovementResponse
+from app.schemas.recurring_expense_template import (
+    RecurringExpenseTemplateCreate,
+    RecurringExpenseTemplateUpdate,
+    RecurringExpenseTemplateResponse,
+)
 from app.models.organization import Organization
 from app.schemas.organization import OrganizationResponse, OrganizationUpdate
 from app.schemas.invitation import InvitationCreate, InvitationResponse
@@ -1603,6 +1613,7 @@ _PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     "finances.manage_billing":    ("Gestionar facturación y cobros", "Puede generar cuotas, registrar cobros, condonar y anular pagos"),
     "finances.manage_payroll":    ("Gestionar liquidaciones de personal", "Puede calcular, generar, pagar y revertir liquidaciones de sueldos"),
     "finances.manage_expenses":   ("Gestionar gastos operativos", "Puede registrar, editar y eliminar gastos de la institución"),
+    "finances.manage_accounts":   ("Gestionar cuentas y movimientos", "Puede crear y editar cuentas de caja/banco y registrar movimientos de capital y transferencias"),
     "finances.manage_discounts":  ("Gestionar descuentos",     "Puede crear, editar y anular descuentos y becas en inscripciones"),
     "org.manage_users":           ("Gestionar usuarios",       "Puede ver y modificar las cuentas de otros miembros"),
     "org.invite_teacher":         ("Invitar miembros",         "Puede enviar invitaciones para unirse a la organización"),
@@ -4547,8 +4558,19 @@ class ExpenseCreate(BaseModel):
     category: str = Field(..., pattern="^(alquiler|servicios|materiales|marketing|mantenimiento|otro)$")
     description: str = Field(..., min_length=1, max_length=500)
     expense_date: datetime_date
-    recurring: bool = False
+    mark_as_paid: bool = False
+    account_id: int | None = None
+    paid_date: datetime_date | None = None
     receipt_note: str | None = Field(None, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_mark_as_paid(self) -> "ExpenseCreate":
+        if self.mark_as_paid:
+            if not self.account_id:
+                raise ValueError("account_id es requerido cuando mark_as_paid=True")
+            if not self.paid_date:
+                raise ValueError("paid_date es requerido cuando mark_as_paid=True")
+        return self
 
 
 class ExpenseUpdate(BaseModel):
@@ -4556,7 +4578,6 @@ class ExpenseUpdate(BaseModel):
     category: str | None = Field(None, pattern="^(alquiler|servicios|materiales|marketing|mantenimiento|otro)$")
     description: str | None = Field(None, min_length=1, max_length=500)
     expense_date: datetime_date | None = None
-    recurring: bool | None = None
     receipt_note: str | None = None
 
 
@@ -4567,11 +4588,24 @@ class ExpenseResponse(BaseModel):
     category: str
     description: str
     expense_date: datetime_date
-    recurring: bool
-    receipt_note: str | None
+    status: str
+    account_id: int | None = None
+    paid_date: datetime_date | None = None
+    recurring_template_id: int | None = None
+    receipt_note: str | None = None
     created_at: datetime_type
     updated_at: datetime_type
     model_config = ConfigDict(from_attributes=True)
+
+
+class ExpensePayRequest(BaseModel):
+    account_id: int
+    paid_date: datetime_date
+
+
+class ExpenseGenerateRecurringRequest(BaseModel):
+    year: int = Field(..., ge=2000, le=2100)
+    month: int = Field(..., ge=1, le=12)
 
 
 @router.post(
@@ -4589,16 +4623,80 @@ async def create_expense(
     if not current_teacher.organization_id:
         raise HTTPException(status_code=400, detail="Sin organización asociada.")
 
+    if data.mark_as_paid:
+        acc_result = await db.execute(
+            select(CashAccount).where(
+                CashAccount.id == data.account_id,
+                CashAccount.organization_id == current_teacher.organization_id,
+            )
+        )
+        if not acc_result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Cuenta no encontrada en tu organización.")
+        initial_status = ExpenseStatus.PAID
+        acc_id = data.account_id
+        p_date = data.paid_date
+    else:
+        initial_status = ExpenseStatus.PENDING
+        acc_id = None
+        p_date = None
+
     expense = Expense(
         organization_id=current_teacher.organization_id,
         amount=data.amount,
         category=ExpenseCategory(data.category),
         description=data.description,
         expense_date=data.expense_date,
-        recurring=data.recurring,
+        status=initial_status,
+        account_id=acc_id,
+        paid_date=p_date,
         receipt_note=data.receipt_note,
     )
     db.add(expense)
+    await db.commit()
+    await db.refresh(expense)
+    return expense
+
+
+@router.post(
+    "/expenses/{expense_id}/pay",
+    response_model=ExpenseResponse,
+    summary="Marcar gasto operativo como pagado",
+)
+async def pay_expense(
+    expense_id: int,
+    body: ExpensePayRequest,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_expenses")),
+):
+    """Marca un gasto operativo pendiente como pagado, asociándolo a una cuenta y fecha de pago."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Expense).where(
+            Expense.id == expense_id,
+            Expense.organization_id == current_teacher.organization_id,
+        )
+    )
+    expense = result.scalar_one_or_none()
+    if not expense:
+        raise HTTPException(status_code=404, detail="Gasto no encontrado en tu organización.")
+    if expense.status == ExpenseStatus.PAID:
+        raise HTTPException(status_code=409, detail="El gasto ya fue pagado.")
+
+    acc_result = await db.execute(
+        select(CashAccount).where(
+            CashAccount.id == body.account_id,
+            CashAccount.organization_id == current_teacher.organization_id,
+        )
+    )
+    if not acc_result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Cuenta no encontrada en tu organización.")
+
+    expense.status = ExpenseStatus.PAID
+    expense.account_id = body.account_id
+    expense.paid_date = body.paid_date
+
     await db.commit()
     await db.refresh(expense)
     return expense
@@ -4611,9 +4709,9 @@ async def create_expense(
 )
 async def list_expenses(
     category: str | None = Query(None),
+    status: str | None = Query(None),
     from_date: datetime_date | None = Query(None),
     to_date: datetime_date | None = Query(None),
-    recurring: bool | None = Query(None),
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(require_permission("org.manage_users")),
 ):
@@ -4627,12 +4725,12 @@ async def list_expenses(
 
     if category is not None:
         query = query.where(Expense.category == ExpenseCategory(category))
+    if status is not None:
+        query = query.where(Expense.status == ExpenseStatus(status))
     if from_date is not None:
         query = query.where(Expense.expense_date >= from_date)
     if to_date is not None:
         query = query.where(Expense.expense_date <= to_date)
-    if recurring is not None:
-        query = query.where(Expense.recurring == recurring)
 
     result = await db.execute(query)
     return result.scalars().all()
@@ -4701,6 +4799,547 @@ async def delete_expense(
     await db.delete(expense)
     await db.commit()
     return {"deleted": True, "expense_id": expense_id}
+
+
+@router.post(
+    "/expenses/generate-recurring",
+    response_model=list[ExpenseResponse],
+    summary="Generar gastos a partir de plantillas recurrentes para un mes",
+)
+async def generate_recurring_expenses(
+    body: ExpenseGenerateRecurringRequest,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_expenses")),
+):
+    """
+    Por cada RecurringExpenseTemplate activo de la organización, verifica si ya existe
+    un Expense con ese recurring_template_id y expense_date = date(year, month, 1).
+    Si no existe, crea un Expense en status='pending' con default_amount, category y
+    description de la plantilla.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    target_date = datetime_date(body.year, body.month, 1)
+
+    templates_result = await db.execute(
+        select(RecurringExpenseTemplate).where(
+            RecurringExpenseTemplate.organization_id == current_teacher.organization_id,
+            RecurringExpenseTemplate.active == True,
+        )
+    )
+    templates = templates_result.scalars().all()
+
+    existing_expenses_result = await db.execute(
+        select(Expense.recurring_template_id).where(
+            Expense.organization_id == current_teacher.organization_id,
+            Expense.expense_date == target_date,
+            Expense.recurring_template_id.is_not(None),
+        )
+    )
+    existing_template_ids = set(existing_expenses_result.scalars().all())
+
+    created_expenses: list[Expense] = []
+    for tmpl in templates:
+        if tmpl.id not in existing_template_ids:
+            exp = Expense(
+                organization_id=current_teacher.organization_id,
+                amount=tmpl.default_amount,
+                category=tmpl.category,
+                description=tmpl.description,
+                expense_date=target_date,
+                status=ExpenseStatus.PENDING,
+                recurring_template_id=tmpl.id,
+            )
+            db.add(exp)
+            created_expenses.append(exp)
+
+    if created_expenses:
+        await db.commit()
+        for exp in created_expenses:
+            await db.refresh(exp)
+
+    return created_expenses
+
+
+# ────────────────────────────────────────────────────
+# RECURRING EXPENSE TEMPLATES (Plantillas de gastos)
+# ────────────────────────────────────────────────────
+
+@router.post(
+    "/recurring-expense-templates",
+    response_model=RecurringExpenseTemplateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear plantilla de gasto recurrente",
+)
+async def create_recurring_expense_template(
+    data: RecurringExpenseTemplateCreate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_expenses")),
+):
+    """Crea una plantilla de gasto recurrente para la organización."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    template = RecurringExpenseTemplate(
+        organization_id=current_teacher.organization_id,
+        category=ExpenseCategory(data.category),
+        description=data.description,
+        default_amount=data.default_amount,
+        active=data.active,
+    )
+    db.add(template)
+    await db.commit()
+    await db.refresh(template)
+    return template
+
+
+@router.get(
+    "/recurring-expense-templates",
+    response_model=list[RecurringExpenseTemplateResponse],
+    summary="Listar plantillas de gasto recurrente",
+)
+async def list_recurring_expense_templates(
+    active: bool | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_expenses")),
+):
+    """Lista las plantillas de gastos recurrentes de la organización."""
+    if not current_teacher.organization_id:
+        return []
+
+    query = select(RecurringExpenseTemplate).where(
+        RecurringExpenseTemplate.organization_id == current_teacher.organization_id
+    ).order_by(RecurringExpenseTemplate.id)
+
+    if active is not None:
+        query = query.where(RecurringExpenseTemplate.active == active)
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.patch(
+    "/recurring-expense-templates/{template_id}",
+    response_model=RecurringExpenseTemplateResponse,
+    summary="Actualizar plantilla de gasto recurrente",
+)
+async def update_recurring_expense_template(
+    template_id: int,
+    data: RecurringExpenseTemplateUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_expenses")),
+):
+    """Actualiza una plantilla de gasto recurrente."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(RecurringExpenseTemplate).where(
+            RecurringExpenseTemplate.id == template_id,
+            RecurringExpenseTemplate.organization_id == current_teacher.organization_id,
+        )
+    )
+    template = result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=404, detail="Plantilla no encontrada en tu organización.")
+
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if field == "category" and value is not None:
+            template.category = ExpenseCategory(value)
+        else:
+            setattr(template, field, value)
+
+    await db.commit()
+    await db.refresh(template)
+    return template
+
+
+@router.delete(
+    "/recurring-expense-templates/{template_id}",
+    summary="Eliminar plantilla de gasto recurrente",
+)
+async def delete_recurring_expense_template(
+    template_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_expenses")),
+):
+    """Elimina una plantilla de gasto recurrente."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(RecurringExpenseTemplate).where(
+            RecurringExpenseTemplate.id == template_id,
+            RecurringExpenseTemplate.organization_id == current_teacher.organization_id,
+        )
+    )
+    template = result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=404, detail="Plantilla no encontrada en tu organización.")
+
+    await db.delete(template)
+    await db.commit()
+    return {"deleted": True, "template_id": template_id}
+
+
+# ────────────────────────────────────────────────────
+# CASH ACCOUNTS (Cuentas financieras de caja y banco)
+# ────────────────────────────────────────────────────
+
+async def _calculate_cash_account_balance(
+    db: AsyncSession,
+    account_id: int,
+    opening_balance: Decimal,
+) -> Decimal:
+    """
+    Calcula el balance actual de una cuenta financiera:
+    opening_balance
+    - SUM(expenses donde account_id y status='paid')
+    + SUM(account_movements donde account_id y movement_type IN ('aporte_capital','transferencia_entrada'))
+    - SUM(account_movements donde account_id y movement_type IN ('retiro_capital','transferencia_salida'))
+    # TODO: sumar Payment y PersonnelPayment cuando tengan account_id (próxima etapa)
+    """
+    exp_res = await db.execute(
+        select(func.coalesce(func.sum(Expense.amount), Decimal("0.00"))).where(
+            Expense.account_id == account_id,
+            Expense.status == ExpenseStatus.PAID,
+        )
+    )
+    total_expenses = exp_res.scalar_one()
+
+    inflow_res = await db.execute(
+        select(func.coalesce(func.sum(AccountMovement.amount), Decimal("0.00"))).where(
+            AccountMovement.account_id == account_id,
+            AccountMovement.movement_type.in_([
+                AccountMovementType.APORTE_CAPITAL,
+                AccountMovementType.TRANSFERENCIA_ENTRADA,
+            ]),
+        )
+    )
+    total_inflow = inflow_res.scalar_one()
+
+    outflow_res = await db.execute(
+        select(func.coalesce(func.sum(AccountMovement.amount), Decimal("0.00"))).where(
+            AccountMovement.account_id == account_id,
+            AccountMovement.movement_type.in_([
+                AccountMovementType.RETIRO_CAPITAL,
+                AccountMovementType.TRANSFERENCIA_SALIDA,
+            ]),
+        )
+    )
+    total_outflow = outflow_res.scalar_one()
+
+    # TODO: sumar Payment y PersonnelPayment cuando tengan account_id (próxima etapa)
+    return opening_balance - total_expenses + total_inflow - total_outflow
+
+
+@router.post(
+    "/cash-accounts",
+    response_model=CashAccountResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear cuenta de caja o banco",
+)
+async def create_cash_account(
+    data: CashAccountCreate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_accounts")),
+):
+    """Crea una nueva cuenta de caja o banco en la organización."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    account = CashAccount(
+        organization_id=current_teacher.organization_id,
+        name=data.name,
+        opening_balance=data.opening_balance,
+        active=True,
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+
+    return CashAccountResponse(
+        id=account.id,
+        organization_id=account.organization_id,
+        name=account.name,
+        opening_balance=account.opening_balance,
+        active=account.active,
+        created_at=account.created_at,
+        updated_at=account.updated_at,
+        current_balance=account.opening_balance,
+    )
+
+
+@router.get(
+    "/cash-accounts",
+    response_model=list[CashAccountResponse],
+    summary="Listar cuentas de caja o banco",
+)
+async def list_cash_accounts(
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Lista todas las cuentas (activas e inactivas) con su balance actual calculado."""
+    if not current_teacher.organization_id:
+        return []
+
+    result = await db.execute(
+        select(CashAccount)
+        .where(CashAccount.organization_id == current_teacher.organization_id)
+        .order_by(CashAccount.id)
+    )
+    accounts = result.scalars().all()
+    if not accounts:
+        return []
+
+    # Gastos pagados agrupados por cuenta
+    exp_stmt = (
+        select(Expense.account_id, func.sum(Expense.amount))
+        .where(
+            Expense.organization_id == current_teacher.organization_id,
+            Expense.status == ExpenseStatus.PAID,
+            Expense.account_id.is_not(None),
+        )
+        .group_by(Expense.account_id)
+    )
+    exp_map = dict((await db.execute(exp_stmt)).all())
+
+    # Inflows agrupados por cuenta
+    inflow_stmt = (
+        select(AccountMovement.account_id, func.sum(AccountMovement.amount))
+        .where(
+            AccountMovement.organization_id == current_teacher.organization_id,
+            AccountMovement.movement_type.in_([
+                AccountMovementType.APORTE_CAPITAL,
+                AccountMovementType.TRANSFERENCIA_ENTRADA,
+            ]),
+        )
+        .group_by(AccountMovement.account_id)
+    )
+    inflow_map = dict((await db.execute(inflow_stmt)).all())
+
+    # Outflows agrupados por cuenta
+    outflow_stmt = (
+        select(AccountMovement.account_id, func.sum(AccountMovement.amount))
+        .where(
+            AccountMovement.organization_id == current_teacher.organization_id,
+            AccountMovement.movement_type.in_([
+                AccountMovementType.RETIRO_CAPITAL,
+                AccountMovementType.TRANSFERENCIA_SALIDA,
+            ]),
+        )
+        .group_by(AccountMovement.account_id)
+    )
+    outflow_map = dict((await db.execute(outflow_stmt)).all())
+
+    responses: list[CashAccountResponse] = []
+    for acc in accounts:
+        # TODO: sumar Payment y PersonnelPayment cuando tengan account_id (próxima etapa)
+        balance = (
+            acc.opening_balance
+            - exp_map.get(acc.id, Decimal("0.00"))
+            + inflow_map.get(acc.id, Decimal("0.00"))
+            - outflow_map.get(acc.id, Decimal("0.00"))
+        )
+        responses.append(
+            CashAccountResponse(
+                id=acc.id,
+                organization_id=acc.organization_id,
+                name=acc.name,
+                opening_balance=acc.opening_balance,
+                active=acc.active,
+                created_at=acc.created_at,
+                updated_at=acc.updated_at,
+                current_balance=balance,
+            )
+        )
+    return responses
+
+
+@router.patch(
+    "/cash-accounts/{account_id}",
+    response_model=CashAccountResponse,
+    summary="Actualizar cuenta de caja o banco",
+)
+async def update_cash_account(
+    account_id: int,
+    data: CashAccountUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_accounts")),
+):
+    """Actualiza name y/o active de una cuenta. Nunca permite modificar opening_balance."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(CashAccount).where(
+            CashAccount.id == account_id,
+            CashAccount.organization_id == current_teacher.organization_id,
+        )
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada en tu organización.")
+
+    if data.name is not None:
+        account.name = data.name
+    if data.active is not None:
+        account.active = data.active
+
+    await db.commit()
+    await db.refresh(account)
+
+    current_balance = await _calculate_cash_account_balance(db, account.id, account.opening_balance)
+
+    return CashAccountResponse(
+        id=account.id,
+        organization_id=account.organization_id,
+        name=account.name,
+        opening_balance=account.opening_balance,
+        active=account.active,
+        created_at=account.created_at,
+        updated_at=account.updated_at,
+        current_balance=current_balance,
+    )
+
+
+# ────────────────────────────────────────────────────
+# ACCOUNT MOVEMENTS (Movimientos de cuenta y transferencias)
+# ────────────────────────────────────────────────────
+
+@router.post(
+    "/account-movements",
+    response_model=AccountMovementResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Registrar un movimiento de cuenta (aporte/retiro/ajuste)",
+)
+async def create_account_movement(
+    data: AccountMovementCreate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_accounts")),
+):
+    """Registra un aporte de capital, retiro de capital o ajuste manual."""
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    acc_result = await db.execute(
+        select(CashAccount).where(
+            CashAccount.id == data.account_id,
+            CashAccount.organization_id == current_teacher.organization_id,
+        )
+    )
+    if not acc_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada en tu organización.")
+
+    movement = AccountMovement(
+        organization_id=current_teacher.organization_id,
+        account_id=data.account_id,
+        related_account_id=None,
+        movement_type=AccountMovementType(data.movement_type),
+        amount=data.amount,
+        description=data.description,
+        movement_date=data.movement_date,
+        created_by_teacher_id=current_teacher.id,
+    )
+    db.add(movement)
+    await db.commit()
+    await db.refresh(movement)
+    return movement
+
+
+@router.post(
+    "/account-movements/transfer",
+    response_model=list[AccountMovementResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="Registrar una transferencia entre cuentas",
+)
+async def create_account_transfer(
+    data: AccountTransferCreate,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_accounts")),
+):
+    """
+    Crea dos registros AccountMovement atómicamente en una sola transacción:
+    - transferencia_salida en from_account con related_account_id = to_account_id
+    - transferencia_entrada en to_account con related_account_id = from_account_id
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    from_acc_res = await db.execute(
+        select(CashAccount).where(
+            CashAccount.id == data.from_account_id,
+            CashAccount.organization_id == current_teacher.organization_id,
+        )
+    )
+    from_acc = from_acc_res.scalar_one_or_none()
+    if not from_acc:
+        raise HTTPException(status_code=404, detail="Cuenta de origen no encontrada en tu organización.")
+
+    to_acc_res = await db.execute(
+        select(CashAccount).where(
+            CashAccount.id == data.to_account_id,
+            CashAccount.organization_id == current_teacher.organization_id,
+        )
+    )
+    to_acc = to_acc_res.scalar_one_or_none()
+    if not to_acc:
+        raise HTTPException(status_code=404, detail="Cuenta de destino no encontrada en tu organización.")
+
+    mov_out = AccountMovement(
+        organization_id=current_teacher.organization_id,
+        account_id=data.from_account_id,
+        related_account_id=data.to_account_id,
+        movement_type=AccountMovementType.TRANSFERENCIA_SALIDA,
+        amount=data.amount,
+        description=data.description,
+        movement_date=data.movement_date,
+        created_by_teacher_id=current_teacher.id,
+    )
+    mov_in = AccountMovement(
+        organization_id=current_teacher.organization_id,
+        account_id=data.to_account_id,
+        related_account_id=data.from_account_id,
+        movement_type=AccountMovementType.TRANSFERENCIA_ENTRADA,
+        amount=data.amount,
+        description=data.description,
+        movement_date=data.movement_date,
+        created_by_teacher_id=current_teacher.id,
+    )
+    db.add(mov_out)
+    db.add(mov_in)
+    await db.commit()
+    await db.refresh(mov_out)
+    await db.refresh(mov_in)
+
+    return [mov_out, mov_in]
+
+
+@router.get(
+    "/account-movements",
+    response_model=list[AccountMovementResponse],
+    summary="Listar movimientos de cuenta",
+)
+async def list_account_movements(
+    account_id: int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """Lista los movimientos de cuentas de la organización, con filtro opcional por account_id."""
+    if not current_teacher.organization_id:
+        return []
+
+    query = select(AccountMovement).where(
+        AccountMovement.organization_id == current_teacher.organization_id
+    ).order_by(AccountMovement.movement_date.desc(), AccountMovement.id.desc())
+
+    if account_id is not None:
+        query = query.where(AccountMovement.account_id == account_id)
+
+    result = await db.execute(query)
+    return result.scalars().all()
 
 
 # ────────────────────────────────────────────────────

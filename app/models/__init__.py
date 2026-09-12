@@ -125,8 +125,18 @@ from .personnel_payment_audit import PersonnelPaymentAudit
 
 from .expense import (
     Expense,
-    ExpenseCategory
+    ExpenseCategory,
+    ExpenseStatus,
 )
+
+from .cash_account import CashAccount
+
+from .account_movement import (
+    AccountMovement,
+    AccountMovementType,
+)
+
+from .recurring_expense_template import RecurringExpenseTemplate
 
 # ========================================
 # EXPORTS
@@ -171,6 +181,11 @@ __all__ = [
     "PersonnelPaymentAudit",
     "Expense",
     "ExpenseCategory",
+    "ExpenseStatus",
+    "CashAccount",
+    "AccountMovement",
+    "AccountMovementType",
+    "RecurringExpenseTemplate",
     
     # Enums de Enrollment
     "EnrollmentStatus",

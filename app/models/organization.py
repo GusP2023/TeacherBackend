@@ -19,6 +19,9 @@ if TYPE_CHECKING:
     from .branch import Branch
     from .invoice import Invoice
     from .expense import Expense
+    from .cash_account import CashAccount
+    from .account_movement import AccountMovement
+    from .recurring_expense_template import RecurringExpenseTemplate
 
 
 class Organization(Base, TimestampMixin):
@@ -112,6 +115,23 @@ class Organization(Base, TimestampMixin):
     )
 
     expenses: Mapped[List["Expense"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    cash_accounts: Mapped[List["CashAccount"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    account_movements: Mapped[List["AccountMovement"]] = relationship(
+        cascade="all, delete-orphan",
+        lazy="noload"
+    )
+
+    recurring_expense_templates: Mapped[List["RecurringExpenseTemplate"]] = relationship(
         back_populates="organization",
         cascade="all, delete-orphan",
         lazy="noload"
