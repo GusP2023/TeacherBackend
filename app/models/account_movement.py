@@ -108,6 +108,7 @@ class AccountMovement(Base):
 
     # ── Relaciones ──────────────────────────────────────────────────────
     organization: Mapped["Organization"] = relationship(
+        back_populates="account_movements",
         lazy="selectin"
     )
 

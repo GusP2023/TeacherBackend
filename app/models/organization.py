@@ -127,6 +127,7 @@ class Organization(Base, TimestampMixin):
     )
 
     account_movements: Mapped[List["AccountMovement"]] = relationship(
+        back_populates="organization",
         cascade="all, delete-orphan",
         lazy="noload"
     )
