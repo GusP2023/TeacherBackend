@@ -11,7 +11,7 @@ class AccountMovementCreate(BaseModel):
         pattern="^(aporte_capital|retiro_capital|ajuste|transferencia_salida|transferencia_entrada)$",
         description="Tipo de movimiento ('aporte_capital', 'retiro_capital', 'ajuste')"
     )
-    amount: Decimal = Field(..., gt=0, description="Monto del movimiento (debe ser mayor a 0)")
+    amount: Decimal = Field(..., description="Monto del movimiento (puede ser negativo solo para ajuste)")
     description: str | None = Field(None, max_length=500, description="Detalle explicativo del movimiento")
     movement_date: date = Field(..., description="Fecha del movimiento")
 
@@ -22,6 +22,12 @@ class AccountMovementCreate(BaseModel):
                 "Los movimientos de tipo transferencia no se pueden registrar directamente; "
                 "debe utilizarse el endpoint de transferencias (/admin/account-movements/transfer)."
             )
+        if self.movement_type == "ajuste":
+            if self.amount == Decimal("0.00") or self.amount == 0:
+                raise ValueError("El monto para un movimiento de tipo 'ajuste' debe ser distinto de 0.")
+        else:
+            if self.amount <= Decimal("0.00"):
+                raise ValueError("El monto debe ser mayor a 0.")
         return self
 
 

@@ -58,7 +58,13 @@ from app.models.expense import Expense, ExpenseCategory, ExpenseStatus
 from app.models.cash_account import CashAccount
 from app.models.account_movement import AccountMovement, AccountMovementType
 from app.models.recurring_expense_template import RecurringExpenseTemplate
-from app.schemas.cash_account import CashAccountCreate, CashAccountUpdate, CashAccountResponse
+from app.schemas.cash_account import (
+    CashAccountCreate,
+    CashAccountUpdate,
+    CashAccountResponse,
+    LedgerItem,
+    AccountLedgerResponse,
+)
 from app.schemas.account_movement import AccountMovementCreate, AccountTransferCreate, AccountMovementResponse
 from app.schemas.recurring_expense_template import (
     RecurringExpenseTemplateCreate,
@@ -5092,6 +5098,14 @@ async def _calculate_cash_account_balance(
     )
     total_payments = pay_res.scalar_one()
 
+    ajuste_res = await db.execute(
+        select(func.coalesce(func.sum(AccountMovement.amount), Decimal("0.00"))).where(
+            AccountMovement.account_id == account_id,
+            AccountMovement.movement_type == AccountMovementType.AJUSTE,
+        )
+    )
+    total_ajustes = ajuste_res.scalar_one()
+
     pers_res = await db.execute(
         select(func.coalesce(func.sum(PersonnelPayment.total_amount), Decimal("0.00"))).where(
             PersonnelPayment.account_id == account_id,
@@ -5100,7 +5114,15 @@ async def _calculate_cash_account_balance(
     )
     total_personnel = pers_res.scalar_one()
 
-    return opening_balance - total_expenses + total_inflow - total_outflow + total_payments - total_personnel
+    return (
+        opening_balance
+        - total_expenses
+        + total_inflow
+        - total_outflow
+        + total_ajustes
+        + total_payments
+        - total_personnel
+    )
 
 
 @router.post(
@@ -5202,6 +5224,17 @@ async def list_cash_accounts(
     )
     outflow_map = dict((await db.execute(outflow_stmt)).all())
 
+    # Ajustes agrupados por cuenta (conserva el signo tal cual está guardado en DB)
+    ajuste_stmt = (
+        select(AccountMovement.account_id, func.sum(AccountMovement.amount))
+        .where(
+            AccountMovement.organization_id == current_teacher.organization_id,
+            AccountMovement.movement_type == AccountMovementType.AJUSTE,
+        )
+        .group_by(AccountMovement.account_id)
+    )
+    ajuste_map = dict((await db.execute(ajuste_stmt)).all())
+
     # Pagos de alumnos agrupados por cuenta
     pay_stmt = (
         select(Payment.account_id, func.sum(Payment.amount))
@@ -5230,6 +5263,7 @@ async def list_cash_accounts(
             - exp_map.get(acc.id, Decimal("0.00"))
             + inflow_map.get(acc.id, Decimal("0.00"))
             - outflow_map.get(acc.id, Decimal("0.00"))
+            + ajuste_map.get(acc.id, Decimal("0.00"))
             + pay_map.get(acc.id, Decimal("0.00"))
             - pers_map.get(acc.id, Decimal("0.00"))
         )
@@ -5292,6 +5326,180 @@ async def update_cash_account(
         created_at=account.created_at,
         updated_at=account.updated_at,
         current_balance=current_balance,
+    )
+
+
+@router.get(
+    "/cash-accounts/{account_id}/ledger",
+    response_model=AccountLedgerResponse,
+    summary="Estado de cuenta combinado (ledger) de una cuenta financiera",
+)
+async def get_cash_account_ledger(
+    account_id: int,
+    from_date: date | None = Query(None, description="Filtrar movimientos desde esta fecha"),
+    to_date: date | None = Query(None, description="Filtrar movimientos hasta esta fecha"),
+    page: int = Query(1, ge=1, description="Número de página"),
+    page_size: int = Query(25, ge=1, le=100, description="Cantidad de elementos por página"),
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Obtiene el estado de cuenta combinado y cronológico de una cuenta de caja o banco.
+    Combina:
+    - Cobros de alumnos (Payment)
+    - Gastos operativos pagados (Expense)
+    - Liquidaciones de profesores pagadas (PersonnelPayment)
+    - Movimientos manuales y transferencias (AccountMovement)
+
+    Calcula el saldo acumulado (running_balance) a partir del opening_balance
+    y devuelve los movimientos en orden descendente (más reciente primero), paginados.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    acc_result = await db.execute(
+        select(CashAccount).where(
+            CashAccount.id == account_id,
+            CashAccount.organization_id == current_teacher.organization_id,
+        )
+    )
+    account = acc_result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada en tu organización.")
+
+    # 1. Payments (Cobros de alumnos)
+    pay_result = await db.execute(
+        select(Payment)
+        .options(
+            selectinload(Payment.enrollment).selectinload(Enrollment.student)
+        )
+        .where(Payment.account_id == account_id)
+    )
+    payments = pay_result.scalars().all()
+
+    # 2. Expenses pagados
+    exp_result = await db.execute(
+        select(Expense).where(
+            Expense.account_id == account_id,
+            Expense.status == ExpenseStatus.PAID,
+        )
+    )
+    expenses = exp_result.scalars().all()
+
+    # 3. PersonnelPayments pagados
+    pers_result = await db.execute(
+        select(PersonnelPayment)
+        .options(selectinload(PersonnelPayment.teacher))
+        .where(
+            PersonnelPayment.account_id == account_id,
+            PersonnelPayment.status == PersonnelPaymentStatus.PAID,
+        )
+    )
+    personnel_payments = pers_result.scalars().all()
+
+    # 4. AccountMovements
+    mov_result = await db.execute(
+        select(AccountMovement)
+        .options(selectinload(AccountMovement.related_account))
+        .where(AccountMovement.account_id == account_id)
+    )
+    movements = mov_result.scalars().all()
+
+    # Consolidar todos los movimientos
+    raw_entries: list[dict] = []
+
+    for p in payments:
+        raw_entries.append({
+            "date": p.payment_date,
+            "type": "cobro",
+            "description": p.concept.value if hasattr(p.concept, "value") else str(p.concept),
+            "counterpart_name": p.enrollment.student.name if (p.enrollment and p.enrollment.student) else None,
+            "amount": Decimal(str(p.amount)),
+            "created_at": p.created_at or datetime_type.min,
+            "id_sort": p.id,
+        })
+
+    for e in expenses:
+        raw_entries.append({
+            "date": e.paid_date or e.expense_date,
+            "type": "gasto",
+            "description": e.description,
+            "counterpart_name": None,
+            "amount": -Decimal(str(e.amount)),
+            "created_at": e.created_at or datetime_type.min,
+            "id_sort": e.id,
+        })
+
+    for pp in personnel_payments:
+        item_date = pp.invoice_date or (pp.updated_at.date() if pp.updated_at else pp.period_to)
+        raw_entries.append({
+            "date": item_date,
+            "type": "liquidacion",
+            "description": f"Liquidación {pp.period_from}–{pp.period_to}",
+            "counterpart_name": pp.teacher.name if pp.teacher else None,
+            "amount": -Decimal(str(pp.total_amount)),
+            "created_at": pp.updated_at or pp.created_at or datetime_type.min,
+            "id_sort": pp.id,
+        })
+
+    for m in movements:
+        amt = Decimal(str(m.amount))
+        m_type = m.movement_type.value if hasattr(m.movement_type, "value") else str(m.movement_type)
+        if m_type in ("aporte_capital", "transferencia_entrada"):
+            signed_amount = abs(amt)
+        elif m_type in ("retiro_capital", "transferencia_salida"):
+            signed_amount = -abs(amt)
+        else:  # ajuste
+            signed_amount = amt
+
+        raw_entries.append({
+            "date": m.movement_date,
+            "type": m_type,
+            "description": m.description,
+            "counterpart_name": m.related_account.name if m.related_account else None,
+            "amount": signed_amount,
+            "created_at": m.created_at or datetime_type.min,
+            "id_sort": m.id,
+        })
+
+    # Ordenar cronológicamente ascendente para cálculo del running_balance
+    raw_entries.sort(key=lambda x: (x["date"], x["created_at"], x["id_sort"]))
+
+    running = account.opening_balance
+    for item in raw_entries:
+        running += item["amount"]
+        item["running_balance"] = running
+
+    # Filtrar por rango de fechas si fue solicitado
+    if from_date is not None:
+        raw_entries = [item for item in raw_entries if item["date"] >= from_date]
+    if to_date is not None:
+        raw_entries = [item for item in raw_entries if item["date"] <= to_date]
+
+    # Invertir a orden descendente (más reciente primero)
+    raw_entries.reverse()
+
+    total_count = len(raw_entries)
+    start = (page - 1) * page_size
+    paged_slice = raw_entries[start : start + page_size]
+
+    items = [
+        LedgerItem(
+            date=item["date"],
+            type=item["type"],
+            description=item["description"],
+            counterpart_name=item["counterpart_name"],
+            amount=item["amount"],
+            running_balance=item["running_balance"],
+        )
+        for item in paged_slice
+    ]
+
+    return AccountLedgerResponse(
+        items=items,
+        total_count=total_count,
+        page=page,
+        page_size=page_size,
     )
 
 

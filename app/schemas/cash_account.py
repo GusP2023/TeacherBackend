@@ -1,5 +1,5 @@
 """Schemas Pydantic para CashAccount"""
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,5 +23,25 @@ class CashAccountResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     current_balance: Decimal
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LedgerItem(BaseModel):
+    date: date
+    type: str
+    description: str | None = None
+    counterpart_name: str | None = None
+    amount: Decimal
+    running_balance: Decimal
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AccountLedgerResponse(BaseModel):
+    items: list[LedgerItem]
+    total_count: int
+    page: int
+    page_size: int
 
     model_config = ConfigDict(from_attributes=True)
