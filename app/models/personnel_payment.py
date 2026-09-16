@@ -20,6 +20,7 @@ from .base import Base, TimestampMixin
 if TYPE_CHECKING:
     from .teacher import Teacher
     from .personnel_payment_audit import PersonnelPaymentAudit
+    from .cash_account import CashAccount
 
 
 class PersonnelPaymentStatus(str, enum.Enum):
@@ -65,7 +66,12 @@ class PersonnelPayment(Base, TimestampMixin):
 
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Datos de factura (solo cuando status='paid')
+    # Datos de factura y cuenta (solo cuando status='paid')
+    account_id:     Mapped[int | None]  = mapped_column(
+        ForeignKey("cash_accounts.id", ondelete="RESTRICT"),
+        nullable=True, index=True,
+        comment="Cuenta financiera (caja/banco) de donde se realizó el pago"
+    )
     invoice_number: Mapped[str | None] = mapped_column(String(100), nullable=True,
                                                         comment="Ej: 001-001-0000123")
     invoice_date:   Mapped[date | None] = mapped_column(Date, nullable=True,
@@ -83,6 +89,16 @@ class PersonnelPayment(Base, TimestampMixin):
         order_by="PersonnelPaymentAudit.created_at",
         cascade="all, delete-orphan",
     )
+
+    account: Mapped["CashAccount | None"] = relationship(
+        lazy="selectin"
+    )
+
+    @property
+    def account_name(self) -> str | None:
+        if "account" in self.__dict__ and self.account is not None:
+            return self.account.name
+        return None
 
     @property
     def revision_count(self) -> int:

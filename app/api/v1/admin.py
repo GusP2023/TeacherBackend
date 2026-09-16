@@ -539,6 +539,8 @@ async def revert_personnel_payment(
     db.add(audit)
 
     payment.status         = PersonnelPaymentStatus.PENDING
+    payment.account_id     = None
+    payment.account        = None
     payment.invoice_number = None
     payment.invoice_date   = None
     payment.invoice_notes  = None
@@ -1063,6 +1065,16 @@ async def create_payment(
     if not current_teacher.organization_id:
         raise HTTPException(status_code=400, detail="Sin organización asociada.")
 
+    acc_result = await db.execute(
+        select(CashAccount).where(
+            CashAccount.id == data.account_id,
+            CashAccount.organization_id == current_teacher.organization_id,
+        )
+    )
+    cash_account = acc_result.scalar_one_or_none()
+    if not cash_account:
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada en tu organización")
+
     enr_result = await db.execute(
         select(Enrollment)
         .join(Teacher, Teacher.id == Enrollment.teacher_id)
@@ -1103,6 +1115,7 @@ async def create_payment(
     payment = Payment(
         enrollment_id=data.enrollment_id,
         billing_period_id=data.billing_period_id,
+        account_id=data.account_id,
         amount=data.amount,
         concept=PaymentConcept(data.concept),
         payment_date=data.payment_date,
@@ -1110,6 +1123,7 @@ async def create_payment(
         notes=data.notes,
         reference=data.reference,
     )
+    payment.account = cash_account
     db.add(payment)
     await db.flush()
 
@@ -1118,6 +1132,7 @@ async def create_payment(
 
     await db.commit()
     await db.refresh(payment)
+    payment.account = cash_account
 
     billing_period_response = None
     if data.billing_period_id is not None:
@@ -1151,6 +1166,8 @@ async def create_payment(
         id=payment.id,
         enrollment_id=payment.enrollment_id,
         billing_period_id=payment.billing_period_id,
+        account_id=payment.account_id,
+        account_name=cash_account.name if cash_account else (payment.account.name if getattr(payment, "account", None) else None),
         amount=payment.amount,
         concept=payment.concept.value if hasattr(payment.concept, 'value') else payment.concept,
         payment_date=payment.payment_date,
@@ -1209,15 +1226,19 @@ async def list_payments(
         enrollment = p.enrollment
         student    = enrollment.student if enrollment else None
         instrument = enrollment.instrument if enrollment else None
+        account    = getattr(p, "account", None)
         responses.append(PaymentResponse(
             id=p.id,
             enrollment_id=p.enrollment_id,
             billing_period_id=p.billing_period_id,
+            account_id=p.account_id,
+            account_name=account.name if account else None,
             amount=p.amount,
             concept=p.concept.value if hasattr(p.concept, 'value') else p.concept,
             payment_date=p.payment_date,
             payment_method=p.payment_method.value if hasattr(p.payment_method, 'value') else p.payment_method,
             notes=p.notes,
+            reference=p.reference,
             student_name=student.name if student else "—",
             instrument_name=instrument.name if instrument else "—",
             created_at=p.created_at,
@@ -3959,6 +3980,20 @@ async def create_personnel_payment(
     invoice_dt  = body.invoice_date if body.mark_as_paid else None
     invoice_nts = body.invoice_notes if body.mark_as_paid else None
 
+    cash_account = None
+    account_id = None
+    if body.mark_as_paid:
+        acc_result = await db.execute(
+            select(CashAccount).where(
+                CashAccount.id == body.account_id,
+                CashAccount.organization_id == current_teacher.organization_id,
+            )
+        )
+        cash_account = acc_result.scalar_one_or_none()
+        if not cash_account:
+            raise HTTPException(status_code=404, detail="Cuenta no encontrada en tu organización")
+        account_id = body.account_id
+
     payment = PersonnelPayment(
         teacher_id=teacher.id,
         period_from=body.period_from,
@@ -3967,11 +4002,14 @@ async def create_personnel_payment(
         notes=body.notes,
         total_amount=total,
         status=initial_status,
+        account_id=account_id,
         invoice_number=invoice_num,
         invoice_date=invoice_dt,
         invoice_notes=invoice_nts,
         **calc,
     )
+    if cash_account:
+        payment.account = cash_account
     db.add(payment)
 
     if body.mark_as_paid:
@@ -3988,6 +4026,8 @@ async def create_personnel_payment(
 
     await db.commit()
     await db.refresh(payment)
+    if cash_account:
+        payment.account = cash_account
     return payment
 
 
@@ -4129,7 +4169,19 @@ async def pay_personnel_payment(
     if payment.status != PersonnelPaymentStatus.PENDING:
         raise HTTPException(status_code=409, detail="La liquidación ya fue pagada.")
 
+    acc_result = await db.execute(
+        select(CashAccount).where(
+            CashAccount.id == body.account_id,
+            CashAccount.organization_id == current_teacher.organization_id,
+        )
+    )
+    cash_account = acc_result.scalar_one_or_none()
+    if not cash_account:
+        raise HTTPException(status_code=404, detail="Cuenta no encontrada en tu organización")
+
     payment.status         = PersonnelPaymentStatus.PAID
+    payment.account_id     = body.account_id
+    payment.account        = cash_account
     payment.invoice_number = body.invoice_number
     payment.invoice_date   = body.invoice_date
     payment.invoice_notes  = body.invoice_notes
@@ -4146,6 +4198,7 @@ async def pay_personnel_payment(
 
     await db.commit()
     await db.refresh(payment)
+    payment.account = cash_account
     return payment
 
 
@@ -4999,7 +5052,8 @@ async def _calculate_cash_account_balance(
     - SUM(expenses donde account_id y status='paid')
     + SUM(account_movements donde account_id y movement_type IN ('aporte_capital','transferencia_entrada'))
     - SUM(account_movements donde account_id y movement_type IN ('retiro_capital','transferencia_salida'))
-    # TODO: sumar Payment y PersonnelPayment cuando tengan account_id (próxima etapa)
+    + SUM(Payment.amount WHERE Payment.account_id = esta cuenta)
+    - SUM(PersonnelPayment.total_amount WHERE PersonnelPayment.account_id = esta cuenta AND status = 'paid')
     """
     exp_res = await db.execute(
         select(func.coalesce(func.sum(Expense.amount), Decimal("0.00"))).where(
@@ -5031,8 +5085,22 @@ async def _calculate_cash_account_balance(
     )
     total_outflow = outflow_res.scalar_one()
 
-    # TODO: sumar Payment y PersonnelPayment cuando tengan account_id (próxima etapa)
-    return opening_balance - total_expenses + total_inflow - total_outflow
+    pay_res = await db.execute(
+        select(func.coalesce(func.sum(Payment.amount), Decimal("0.00"))).where(
+            Payment.account_id == account_id,
+        )
+    )
+    total_payments = pay_res.scalar_one()
+
+    pers_res = await db.execute(
+        select(func.coalesce(func.sum(PersonnelPayment.total_amount), Decimal("0.00"))).where(
+            PersonnelPayment.account_id == account_id,
+            PersonnelPayment.status == PersonnelPaymentStatus.PAID,
+        )
+    )
+    total_personnel = pers_res.scalar_one()
+
+    return opening_balance - total_expenses + total_inflow - total_outflow + total_payments - total_personnel
 
 
 @router.post(
@@ -5134,14 +5202,36 @@ async def list_cash_accounts(
     )
     outflow_map = dict((await db.execute(outflow_stmt)).all())
 
+    # Pagos de alumnos agrupados por cuenta
+    pay_stmt = (
+        select(Payment.account_id, func.sum(Payment.amount))
+        .where(
+            Payment.account_id.in_([a.id for a in accounts]),
+        )
+        .group_by(Payment.account_id)
+    )
+    pay_map = dict((await db.execute(pay_stmt)).all())
+
+    # Pagos de personal pagados agrupados por cuenta
+    pers_stmt = (
+        select(PersonnelPayment.account_id, func.sum(PersonnelPayment.total_amount))
+        .where(
+            PersonnelPayment.account_id.in_([a.id for a in accounts]),
+            PersonnelPayment.status == PersonnelPaymentStatus.PAID,
+        )
+        .group_by(PersonnelPayment.account_id)
+    )
+    pers_map = dict((await db.execute(pers_stmt)).all())
+
     responses: list[CashAccountResponse] = []
     for acc in accounts:
-        # TODO: sumar Payment y PersonnelPayment cuando tengan account_id (próxima etapa)
         balance = (
             acc.opening_balance
             - exp_map.get(acc.id, Decimal("0.00"))
             + inflow_map.get(acc.id, Decimal("0.00"))
             - outflow_map.get(acc.id, Decimal("0.00"))
+            + pay_map.get(acc.id, Decimal("0.00"))
+            - pers_map.get(acc.id, Decimal("0.00"))
         )
         responses.append(
             CashAccountResponse(

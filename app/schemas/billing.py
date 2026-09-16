@@ -91,6 +91,7 @@ class PaymentCreate(BaseModel):
         default="efectivo",
         pattern="^(efectivo|transferencia|tarjeta|otro)$"
     )
+    account_id: int
     notes: str | None = None
     reference: str | None = None
 
@@ -107,6 +108,8 @@ class PaymentResponse(BaseModel):
     reference: str | None = None
     student_name: str
     instrument_name: str
+    account_id: int | None = None
+    account_name: str | None = None
     created_at: datetime
     updated_at: datetime
     billing_period: BillingPeriodResponse | None = None

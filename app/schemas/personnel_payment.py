@@ -32,6 +32,7 @@ class PersonnelPaymentCreate(BaseModel):
     adjustment:     Decimal = Field(default=Decimal("0.00"))
     notes:          str | None = None
     mark_as_paid:   bool = False
+    account_id:     int | None = None
     invoice_number: str | None = Field(None, max_length=100)
     invoice_date:   date | None = None
     invoice_notes:  str | None = None
@@ -43,6 +44,8 @@ class PersonnelPaymentCreate(BaseModel):
                 raise ValueError("invoice_number es requerido y no puede estar vacío cuando mark_as_paid=True")
             if not self.invoice_date:
                 raise ValueError("invoice_date es requerido cuando mark_as_paid=True")
+            if not self.account_id:
+                raise ValueError("account_id es requerido cuando mark_as_paid=True")
         return self
 
 
@@ -55,6 +58,7 @@ class PersonnelPaymentUpdate(BaseModel):
 
 
 class PersonnelPaymentPayRequest(BaseModel):
+    account_id:     int
     invoice_number: str = Field(..., max_length=100)
     invoice_date:   date
     invoice_notes:  str | None = None
@@ -87,6 +91,8 @@ class PersonnelPaymentResponse(BaseModel):
     invoice_date:                date | None
     invoice_notes:               str | None
     revision_count:              int = 0
+    account_id:                  int | None = None
+    account_name:                str | None = None
     created_at:                  datetime
     updated_at:                  datetime
 

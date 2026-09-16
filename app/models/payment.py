@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .enrollment import Enrollment
     from .billing_period import BillingPeriod
     from .invoice import Invoice
+    from .cash_account import CashAccount
 
 
 class PaymentConcept(str, enum.Enum):
@@ -137,6 +138,13 @@ class Payment(Base, TimestampMixin):
         index=True,
         comment="Comprobante emitido (NULL si no se generó factura/recibo)"
     )
+
+    account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cash_accounts.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+        comment="Cuenta financiera (caja/banco) asociada al pago"
+    )
     
     # ========================================
     # MONTOS
@@ -202,6 +210,16 @@ class Payment(Base, TimestampMixin):
         back_populates="payments",
         lazy="selectin"
     )
+
+    account: Mapped["CashAccount | None"] = relationship(
+        lazy="selectin"
+    )
+
+    @property
+    def account_name(self) -> str | None:
+        if "account" in self.__dict__ and self.account is not None:
+            return self.account.name
+        return None
 
     # ========================================
     # CONSTRAINTS
