@@ -1030,8 +1030,8 @@ async def delete_billing_period(
     current_teacher: Teacher = Depends(require_permission("finances.manage_billing")),
 ):
     """
-    Elimina un BillingPeriod y todos sus pagos asociados (cascade).
-    No hay restricción por status — se puede eliminar en cualquier estado.
+    Elimina un BillingPeriod sin pagos asociados.
+    No se puede eliminar si tiene pagos registrados (incluso anulados).
     Usar cuando la cuota fue generada por error.
     """
     if not current_teacher.organization_id:
@@ -1050,6 +1050,12 @@ async def delete_billing_period(
     bp = result.scalar_one_or_none()
     if not bp:
         raise HTTPException(status_code=404, detail="Período de cobro no encontrado.")
+
+    if bp.payments:
+        raise HTTPException(
+            status_code=409,
+            detail="No se puede eliminar un período de cobro con pagos registrados (incluso anulados). Usa 'Condonar' para el saldo restante, o anulá el pago individual si fue un error."
+        )
 
     payments_deleted = len(bp.payments)
 
