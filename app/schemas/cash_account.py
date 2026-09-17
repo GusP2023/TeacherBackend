@@ -35,6 +35,7 @@ class LedgerItem(BaseModel):
     amount: Decimal
     running_balance: Decimal
     is_voided: bool = False
+    reason: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -44,5 +45,6 @@ class AccountLedgerResponse(BaseModel):
     total_count: int
     page: int
     page_size: int
+    reason: str | None = None
 
     model_config = ConfigDict(from_attributes=True)

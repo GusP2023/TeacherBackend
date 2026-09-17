@@ -546,6 +546,7 @@ async def revert_personnel_payment(
         payment_id=payment.id,
         action="reverted",
         performed_by_teacher_id=current_teacher.id,
+        account_id=payment.account_id,
         invoice_number=payment.invoice_number,
         invoice_date=payment.invoice_date,
         invoice_notes=payment.invoice_notes,
@@ -5672,29 +5673,49 @@ async def get_cash_account_ledger(
     )
     payments = pay_result.scalars().all()
 
-    # 2. ExpenseAudits (action='paid')
-    exp_audit_result = await db.execute(
+    # 2. Expenses pagados directamente (mismo criterio que list_cash_accounts)
+    exp_result = await db.execute(
+        select(Expense).where(
+            Expense.account_id == account_id,
+            Expense.status == ExpenseStatus.PAID,
+        )
+    )
+    expenses = exp_result.scalars().all()
+
+    # 2b. Expenses revertidos (ExpenseAudit con action='reverted')
+    exp_rev_result = await db.execute(
         select(ExpenseAudit)
         .options(selectinload(ExpenseAudit.expense))
         .where(
             ExpenseAudit.account_id == account_id,
-            ExpenseAudit.action == "paid",
+            ExpenseAudit.action == "reverted",
         )
     )
-    expense_audits = exp_audit_result.scalars().all()
+    reverted_expense_audits = exp_rev_result.scalars().all()
 
-    # 3. PersonnelPaymentAudits (action='paid')
-    pers_audit_result = await db.execute(
+    # 3. PersonnelPayments pagados directamente (mismo criterio que list_cash_accounts)
+    pers_result = await db.execute(
+        select(PersonnelPayment)
+        .options(selectinload(PersonnelPayment.teacher))
+        .where(
+            PersonnelPayment.account_id == account_id,
+            PersonnelPayment.status == PersonnelPaymentStatus.PAID,
+        )
+    )
+    personnel_payments = pers_result.scalars().all()
+
+    # 3b. PersonnelPayments revertidos (PersonnelPaymentAudit con action='reverted')
+    pers_rev_result = await db.execute(
         select(PersonnelPaymentAudit)
         .options(
             selectinload(PersonnelPaymentAudit.payment).selectinload(PersonnelPayment.teacher)
         )
         .where(
             PersonnelPaymentAudit.account_id == account_id,
-            PersonnelPaymentAudit.action == "paid",
+            PersonnelPaymentAudit.action == "reverted",
         )
     )
-    personnel_audits = pers_audit_result.scalars().all()
+    reverted_personnel_audits = pers_rev_result.scalars().all()
 
     # 4. AccountMovements
     mov_result = await db.execute(
@@ -5717,40 +5738,74 @@ async def get_cash_account_ledger(
             "created_at": p.created_at.replace(tzinfo=None) if p.created_at else datetime_type.min,
             "id_sort": p.id,
             "is_voided": p.voided_at is not None,
+            "reason": p.void_reason if p.voided_at else None,
         })
 
-    for ea in expense_audits:
-        e = ea.expense
-        if not e:
-            continue
-        item_date = ea.paid_date or e.paid_date or e.expense_date
-        is_voided = (e.status != ExpenseStatus.PAID)
+    for e in expenses:
         raw_entries.append({
-            "date": item_date,
+            "date": e.paid_date or e.expense_date,
             "type": "gasto",
             "description": e.description,
             "counterpart_name": None,
             "amount": -Decimal(str(e.amount)),
-            "created_at": ea.created_at.replace(tzinfo=None) if ea.created_at else datetime_type.min,
-            "id_sort": ea.id,
-            "is_voided": is_voided,
+            "created_at": e.created_at.replace(tzinfo=None) if e.created_at else datetime_type.min,
+            "id_sort": e.id,
+            "is_voided": False,
+            "reason": None,
         })
 
-    for pa in personnel_audits:
-        pp = pa.payment
-        if not pp:
+    for ea in reverted_expense_audits:
+        e = ea.expense
+        if not e:
             continue
-        item_date = pa.invoice_date or pp.invoice_date or (pa.created_at.date() if pa.created_at else pp.period_to)
-        is_voided = (pp.status != PersonnelPaymentStatus.PAID)
+        item_date = ea.paid_date or e.expense_date or (ea.created_at.date() if ea.created_at else date.today())
+        desc = e.description or "Gasto"
+        if ea.reason:
+            desc = f"{desc} ({ea.reason})"
+        raw_entries.append({
+            "date": item_date,
+            "type": "gasto",
+            "description": desc,
+            "counterpart_name": None,
+            "amount": -Decimal(str(e.amount)),
+            "created_at": ea.created_at.replace(tzinfo=None) if ea.created_at else datetime_type.min,
+            "id_sort": ea.id,
+            "is_voided": True,
+            "reason": ea.reason,
+        })
+
+    for pp in personnel_payments:
+        item_date = pp.invoice_date or (pp.created_at.date() if pp.created_at else pp.period_to)
         raw_entries.append({
             "date": item_date,
             "type": "liquidacion",
             "description": f"Liquidación {pp.period_from}–{pp.period_to}",
             "counterpart_name": pp.teacher.name if pp.teacher else None,
             "amount": -Decimal(str(pp.total_amount)),
+            "created_at": pp.created_at.replace(tzinfo=None) if pp.created_at else datetime_type.min,
+            "id_sort": pp.id,
+            "is_voided": False,
+            "reason": None,
+        })
+
+    for pa in reverted_personnel_audits:
+        pp = pa.payment
+        if not pp:
+            continue
+        item_date = pa.invoice_date or pp.invoice_date or (pa.created_at.date() if pa.created_at else pp.period_to)
+        desc = f"Liquidación {pp.period_from}–{pp.period_to}"
+        if pa.reason:
+            desc = f"{desc} ({pa.reason})"
+        raw_entries.append({
+            "date": item_date,
+            "type": "liquidacion",
+            "description": desc,
+            "counterpart_name": pp.teacher.name if pp.teacher else None,
+            "amount": -Decimal(str(pp.total_amount)),
             "created_at": pa.created_at.replace(tzinfo=None) if pa.created_at else datetime_type.min,
             "id_sort": pa.id,
-            "is_voided": is_voided,
+            "is_voided": True,
+            "reason": pa.reason,
         })
 
     for m in movements:
@@ -5769,9 +5824,10 @@ async def get_cash_account_ledger(
             "description": m.description,
             "counterpart_name": m.related_account.name if m.related_account else None,
             "amount": signed_amount,
-            "created_at": m.created_at or datetime_type.min,
+            "created_at": m.created_at.replace(tzinfo=None) if m.created_at else datetime_type.min,
             "id_sort": m.id,
             "is_voided": False,
+            "reason": None,
         })
 
     # Ordenar cronológicamente ascendente para cálculo del running_balance
@@ -5805,6 +5861,7 @@ async def get_cash_account_ledger(
             amount=item["amount"],
             running_balance=item["running_balance"],
             is_voided=item.get("is_voided", False),
+            reason=item.get("reason"),
         )
         for item in paged_slice
     ]
