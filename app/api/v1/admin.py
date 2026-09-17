@@ -13,7 +13,7 @@ Endpoints:
     GET   /admin/permissions/schema              → Ver qué permisos son configurables (con labels)
 """
 
-from datetime import date, date as datetime_date, time as time_module, datetime as datetime_type, timedelta, time as time_type
+from datetime import date, date as datetime_date, time as time_module, datetime as datetime_type, timedelta, time as time_type, timezone, datetime
 from decimal import Decimal
 from typing import Optional, Literal
 
@@ -82,7 +82,7 @@ from app.schemas.billing import (
     GenerateBillingPeriodsResponse, StudentBillingSummary,
     StudentBrief as BillingStudentBrief,
     EnrollmentBrief,
-    PaymentCreate, PaymentResponse, DeletePaymentResponse,
+    PaymentCreate, PaymentResponse, PaymentVoidRequest,
 )
 from app.schemas.personnel_payment import (
     PersonnelPaymentPreviewRequest, PersonnelPaymentPreviewResponse,
@@ -449,7 +449,8 @@ async def _recalculate_billing_status(db: AsyncSession, billing_period_id: int) 
 
     sum_result = await db.execute(
         select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.billing_period_id == billing_period_id
+            Payment.billing_period_id == billing_period_id,
+            Payment.voided_at.is_(None),
         )
     )
     amount_paid = Decimal(str(sum_result.scalar_one()))
@@ -629,7 +630,10 @@ async def get_billing_summary(
     if bp_ids:
         paid_rows = await db.execute(
             select(Payment.billing_period_id, func.sum(Payment.amount))
-            .where(Payment.billing_period_id.in_(bp_ids))
+            .where(
+                Payment.billing_period_id.in_(bp_ids),
+                Payment.voided_at.is_(None),
+            )
             .group_by(Payment.billing_period_id)
         )
         paid_map = {row[0]: Decimal(str(row[1])) for row in paid_rows.all()}
@@ -761,7 +765,10 @@ async def list_billing_periods(
     if bp_ids:
         paid_result = await db.execute(
             select(Payment.billing_period_id, func.sum(Payment.amount))
-            .where(Payment.billing_period_id.in_(bp_ids))
+            .where(
+                Payment.billing_period_id.in_(bp_ids),
+                Payment.voided_at.is_(None),
+            )
             .group_by(Payment.billing_period_id)
         )
         paid_map = {row[0]: Decimal(str(row[1])) for row in paid_result.all()}
@@ -936,7 +943,10 @@ async def update_billing_period(
 
     paid_result = await db.execute(
         select(func.coalesce(func.sum(Payment.amount), 0))
-        .where(Payment.billing_period_id == bp.id)
+        .where(
+            Payment.billing_period_id == bp.id,
+            Payment.voided_at.is_(None),
+        )
     )
     amount_paid = Decimal(str(paid_result.scalar_one()))
 
@@ -992,7 +1002,10 @@ async def waive_billing_period(
 
     paid_result = await db.execute(
         select(func.coalesce(func.sum(Payment.amount), 0))
-        .where(Payment.billing_period_id == bp.id)
+        .where(
+            Payment.billing_period_id == bp.id,
+            Payment.voided_at.is_(None),
+        )
     )
     amount_paid = Decimal(str(paid_result.scalar_one()))
 
@@ -1155,7 +1168,10 @@ async def create_payment(
         if bp:
             paid_result = await db.execute(
                 select(func.coalesce(func.sum(Payment.amount), 0))
-                .where(Payment.billing_period_id == bp.id)
+                .where(
+                    Payment.billing_period_id == bp.id,
+                    Payment.voided_at.is_(None),
+                )
             )
             amount_paid = Decimal(str(paid_result.scalar_one()))
             teacher_name = (
@@ -1182,6 +1198,9 @@ async def create_payment(
         reference=payment.reference,
         student_name=student.name if student else "—",
         instrument_name=instrument.name if instrument else "—",
+        voided_at=payment.voided_at,
+        voided_by_teacher_name=None,
+        void_reason=payment.void_reason,
         created_at=payment.created_at,
         updated_at=payment.updated_at,
         billing_period=billing_period_response,
@@ -1247,24 +1266,28 @@ async def list_payments(
             reference=p.reference,
             student_name=student.name if student else "—",
             instrument_name=instrument.name if instrument else "—",
+            voided_at=p.voided_at,
+            voided_by_teacher_name=p.voided_by.name if p.voided_by else None,
+            void_reason=p.void_reason,
             created_at=p.created_at,
             updated_at=p.updated_at,
         ))
     return responses
 
 
-@router.delete(
-    "/payments/{payment_id}",
-    response_model=DeletePaymentResponse,
-    summary="Eliminar un pago de alumno",
+@router.post(
+    "/payments/{payment_id}/void",
+    response_model=PaymentResponse,
+    summary="Anular un pago de alumno",
 )
-async def delete_payment(
+async def void_payment(
     payment_id: int,
+    body: PaymentVoidRequest,
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(require_permission("finances.manage_billing")),
 ):
     """
-    Elimina un pago registrado por error.
+    Anula un pago registrado previamente.
     Si el pago estaba vinculado a un BillingPeriod, recalcula su status automáticamente.
     """
     if not current_teacher.organization_id:
@@ -1283,15 +1306,21 @@ async def delete_payment(
     if not payment:
         raise HTTPException(status_code=404, detail="Pago no encontrado.")
 
-    billing_period_id = payment.billing_period_id
+    if payment.voided_at is not None:
+        raise HTTPException(status_code=409, detail="Este pago ya fue anulado.")
 
-    await db.delete(payment)
+    payment.voided_at = datetime.now(timezone.utc)
+    payment.voided_by_teacher_id = current_teacher.id
+    payment.void_reason = body.reason
+
     await db.flush()
 
+    billing_period_id = payment.billing_period_id
     if billing_period_id is not None:
         await _recalculate_billing_status(db, billing_period_id)
 
     await db.commit()
+    await db.refresh(payment)
 
     billing_period_response = None
     if billing_period_id is not None:
@@ -1308,7 +1337,10 @@ async def delete_payment(
         if bp:
             paid_result = await db.execute(
                 select(func.coalesce(func.sum(Payment.amount), 0))
-                .where(Payment.billing_period_id == bp.id)
+                .where(
+                    Payment.billing_period_id == bp.id,
+                    Payment.voided_at.is_(None),
+                )
             )
             amount_paid = Decimal(str(paid_result.scalar_one()))
             teacher_name = (
@@ -1318,9 +1350,30 @@ async def delete_payment(
             )
             billing_period_response = _build_bp_response(bp, amount_paid, teacher_name)
 
-    return DeletePaymentResponse(
-        deleted=True,
-        payment_id=payment_id,
+    enrollment = payment.enrollment
+    student    = enrollment.student if enrollment else None
+    instrument = enrollment.instrument if enrollment else None
+    account    = getattr(payment, "account", None)
+
+    return PaymentResponse(
+        id=payment.id,
+        enrollment_id=payment.enrollment_id,
+        billing_period_id=payment.billing_period_id,
+        account_id=payment.account_id,
+        account_name=account.name if account else None,
+        amount=payment.amount,
+        concept=payment.concept.value if hasattr(payment.concept, 'value') else payment.concept,
+        payment_date=payment.payment_date,
+        payment_method=payment.payment_method.value if hasattr(payment.payment_method, 'value') else payment.payment_method,
+        notes=payment.notes,
+        reference=payment.reference,
+        student_name=student.name if student else "—",
+        instrument_name=instrument.name if instrument else "—",
+        voided_at=payment.voided_at,
+        voided_by_teacher_name=current_teacher.name,
+        void_reason=payment.void_reason,
+        created_at=payment.created_at,
+        updated_at=payment.updated_at,
         billing_period=billing_period_response,
     )
 
@@ -5094,6 +5147,7 @@ async def _calculate_cash_account_balance(
     pay_res = await db.execute(
         select(func.coalesce(func.sum(Payment.amount), Decimal("0.00"))).where(
             Payment.account_id == account_id,
+            Payment.voided_at.is_(None),
         )
     )
     total_payments = pay_res.scalar_one()
@@ -5240,6 +5294,7 @@ async def list_cash_accounts(
         select(Payment.account_id, func.sum(Payment.amount))
         .where(
             Payment.account_id.in_([a.id for a in accounts]),
+            Payment.voided_at.is_(None),
         )
         .group_by(Payment.account_id)
     )
@@ -5373,7 +5428,10 @@ async def get_cash_account_ledger(
         .options(
             selectinload(Payment.enrollment).selectinload(Enrollment.student)
         )
-        .where(Payment.account_id == account_id)
+        .where(
+            Payment.account_id == account_id,
+            Payment.voided_at.is_(None),
+        )
     )
     payments = pay_result.scalars().all()
 

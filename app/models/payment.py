@@ -6,9 +6,9 @@ La relación con el alumno/institución se obtiene a través de enrollment_id.
 Opcionalmente puede tener un Invoice asociado (comprobante emitido).
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
-from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, Text, CheckConstraint, Numeric
+from sqlalchemy import String, Integer, Date, DateTime, Enum as SQLEnum, ForeignKey, Text, CheckConstraint, Numeric
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import TYPE_CHECKING
 import enum
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from .billing_period import BillingPeriod
     from .invoice import Invoice
     from .cash_account import CashAccount
+    from .teacher import Teacher
 
 
 class PaymentConcept(str, enum.Enum):
@@ -192,6 +193,24 @@ class Payment(Base, TimestampMixin):
         comment="Referencia bancaria o número de recibo (opcional)"
     )
 
+    voided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Fecha y hora de anulación del pago"
+    )
+
+    voided_by_teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("teachers.id", ondelete="RESTRICT"),
+        nullable=True,
+        comment="Profesor/admin que anuló el pago"
+    )
+
+    void_reason: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="Motivo de la anulación"
+    )
+
     # ========================================
     # RELACIONES
     # ========================================
@@ -215,11 +234,19 @@ class Payment(Base, TimestampMixin):
         lazy="selectin"
     )
 
+    voided_by: Mapped["Teacher | None"] = relationship(
+        lazy="selectin"
+    )
+
     @property
     def account_name(self) -> str | None:
         if "account" in self.__dict__ and self.account is not None:
             return self.account.name
         return None
+
+    @property
+    def is_voided(self) -> bool:
+        return self.voided_at is not None
 
     # ========================================
     # CONSTRAINTS

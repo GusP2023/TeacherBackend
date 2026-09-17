@@ -96,6 +96,10 @@ class PaymentCreate(BaseModel):
     reference: str | None = None
 
 
+class PaymentVoidRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
 class PaymentResponse(BaseModel):
     id: int
     enrollment_id: int
@@ -110,16 +114,13 @@ class PaymentResponse(BaseModel):
     instrument_name: str
     account_id: int | None = None
     account_name: str | None = None
+    voided_at: datetime | None = None
+    voided_by_teacher_name: str | None = None
+    void_reason: str | None = None
     created_at: datetime
     updated_at: datetime
     billing_period: BillingPeriodResponse | None = None
     model_config = ConfigDict(from_attributes=True)
-
-
-class DeletePaymentResponse(BaseModel):
-    deleted: bool
-    payment_id: int
-    billing_period: BillingPeriodResponse | None = None
 
 
 class StudentBillingSummary(BaseModel):
