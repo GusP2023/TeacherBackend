@@ -128,6 +128,10 @@ from .expense import (
     ExpenseCategory,
     ExpenseStatus,
 )
+from .expense_audit import (
+    ExpenseAudit,
+    ExpenseAuditAction,
+)
 
 from .cash_account import CashAccount
 
@@ -182,6 +186,8 @@ __all__ = [
     "Expense",
     "ExpenseCategory",
     "ExpenseStatus",
+    "ExpenseAudit",
+    "ExpenseAuditAction",
     "CashAccount",
     "AccountMovement",
     "AccountMovementType",

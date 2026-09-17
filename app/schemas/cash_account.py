@@ -34,6 +34,7 @@ class LedgerItem(BaseModel):
     counterpart_name: str | None = None
     amount: Decimal
     running_balance: Decimal
+    is_voided: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

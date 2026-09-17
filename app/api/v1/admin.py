@@ -55,6 +55,7 @@ from app.models.personnel_payment import PersonnelPayment, PersonnelPaymentStatu
 from app.models.personnel_payment_audit import PersonnelPaymentAudit
 from app.models.fee_discount import FeeDiscount, DiscountType
 from app.models.expense import Expense, ExpenseCategory, ExpenseStatus
+from app.models.expense_audit import ExpenseAudit, ExpenseAuditAction
 from app.models.cash_account import CashAccount
 from app.models.account_movement import AccountMovement, AccountMovementType
 from app.models.recurring_expense_template import RecurringExpenseTemplate
@@ -87,8 +88,8 @@ from app.schemas.billing import (
 from app.schemas.personnel_payment import (
     PersonnelPaymentPreviewRequest, PersonnelPaymentPreviewResponse,
     PersonnelPaymentCreate, PersonnelPaymentUpdate,
-    PersonnelPaymentPayRequest, PersonnelPaymentResponse,
-    PersonnelPaymentAuditResponse,
+    PersonnelPaymentPayRequest, PersonnelPaymentRevertRequest,
+    PersonnelPaymentResponse, PersonnelPaymentAuditResponse,
     PendingAlertTeacher, PendingMonth,
 )
 from app.api.v1.websocket import notify_data_change
@@ -510,6 +511,7 @@ def _build_bp_response(bp: BillingPeriod, amount_paid: Decimal,
 )
 async def revert_personnel_payment(
     payment_id: int,
+    body: PersonnelPaymentRevertRequest,
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(require_permission("finances.manage_payroll")),
 ):
@@ -542,6 +544,7 @@ async def revert_personnel_payment(
         invoice_number=payment.invoice_number,
         invoice_date=payment.invoice_date,
         invoice_notes=payment.invoice_notes,
+        reason=body.reason,
     )
     db.add(audit)
 
@@ -4349,6 +4352,7 @@ async def get_personnel_payment_audit(
             invoice_number=entry.invoice_number,
             invoice_date=entry.invoice_date,
             invoice_notes=entry.invoice_notes,
+            reason=entry.reason,
             created_at=entry.created_at,
         )
         for entry in audit_entries
@@ -4705,6 +4709,7 @@ class ExpenseResponse(BaseModel):
     paid_date: datetime_date | None = None
     recurring_template_id: int | None = None
     receipt_note: str | None = None
+    revision_count: int = 0
     created_at: datetime_type
     updated_at: datetime_type
     model_config = ConfigDict(from_attributes=True)
@@ -4713,6 +4718,21 @@ class ExpenseResponse(BaseModel):
 class ExpensePayRequest(BaseModel):
     account_id: int
     paid_date: datetime_date
+
+
+class ExpenseRevertRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class ExpenseAuditResponse(BaseModel):
+    id: int
+    action: Literal["paid", "reverted"]
+    performed_by_teacher_name: str
+    reason: str | None = None
+    account_name: str | None = None
+    paid_date: datetime_date | None = None
+    created_at: datetime_type
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ExpenseGenerateRecurringRequest(BaseModel):
@@ -4764,6 +4784,19 @@ async def create_expense(
         receipt_note=data.receipt_note,
     )
     db.add(expense)
+
+    if data.mark_as_paid:
+        await db.flush()
+        audit = ExpenseAudit(
+            expense_id=expense.id,
+            action="paid",
+            performed_by_teacher_id=current_teacher.id,
+            account_id=acc_id,
+            paid_date=p_date,
+            reason=None,
+        )
+        db.add(audit)
+
     await db.commit()
     await db.refresh(expense)
     return expense
@@ -4809,9 +4842,129 @@ async def pay_expense(
     expense.account_id = body.account_id
     expense.paid_date = body.paid_date
 
+    audit = ExpenseAudit(
+        expense_id=expense.id,
+        action="paid",
+        performed_by_teacher_id=current_teacher.id,
+        account_id=body.account_id,
+        paid_date=body.paid_date,
+        reason=None,
+    )
+    db.add(audit)
+
     await db.commit()
     await db.refresh(expense)
     return expense
+
+
+# ────────────────────────────────────────────────────
+# POST /admin/expenses/{expense_id}/revert
+# ────────────────────────────────────────────────────
+@router.post(
+    "/expenses/{expense_id}/revert",
+    response_model=ExpenseResponse,
+    summary="Revertir un gasto pagado a pendiente",
+)
+async def revert_expense(
+    expense_id: int,
+    body: ExpenseRevertRequest,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_expenses")),
+):
+    """
+    Revierte un Expense de status=paid a status=pending.
+    Limpia los datos de cuenta y fecha de pago.
+    Crea registro de auditoría con motivo obligatorio y snapshot previo.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Expense).where(
+            Expense.id == expense_id,
+            Expense.organization_id == current_teacher.organization_id,
+        )
+    )
+    expense = result.scalar_one_or_none()
+    if not expense:
+        raise HTTPException(status_code=404, detail="Gasto no encontrado en tu organización.")
+    if expense.status != ExpenseStatus.PAID:
+        raise HTTPException(status_code=409, detail="Solo se pueden revertir gastos pagados.")
+
+    audit = ExpenseAudit(
+        expense_id=expense.id,
+        action="reverted",
+        performed_by_teacher_id=current_teacher.id,
+        account_id=expense.account_id,
+        paid_date=expense.paid_date,
+        reason=body.reason,
+    )
+    db.add(audit)
+
+    expense.status     = ExpenseStatus.PENDING
+    expense.account_id = None
+    expense.account    = None
+    expense.paid_date  = None
+
+    await db.commit()
+    await db.refresh(expense)
+    return expense
+
+
+# ────────────────────────────────────────────────────
+# GET /admin/expenses/{expense_id}/audit
+# ────────────────────────────────────────────────────
+@router.get(
+    "/expenses/{expense_id}/audit",
+    response_model=list[ExpenseAuditResponse],
+    summary="Historial de auditoría de un gasto",
+)
+async def get_expense_audit(
+    expense_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("org.manage_users")),
+):
+    """
+    Devuelve el historial de auditoría de un gasto operativo (pagos y reversiones),
+    ordenado cronológicamente por created_at ascendente.
+    Requiere permiso org.manage_users.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(Expense).where(
+            Expense.id == expense_id,
+            Expense.organization_id == current_teacher.organization_id,
+        )
+    )
+    expense = result.scalar_one_or_none()
+    if not expense:
+        raise HTTPException(status_code=404, detail="Gasto no encontrado en tu organización.")
+
+    audit_result = await db.execute(
+        select(ExpenseAudit)
+        .options(
+            selectinload(ExpenseAudit.performed_by),
+            selectinload(ExpenseAudit.account),
+        )
+        .where(ExpenseAudit.expense_id == expense_id)
+        .order_by(ExpenseAudit.created_at.asc())
+    )
+    audit_entries = audit_result.scalars().all()
+
+    return [
+        ExpenseAuditResponse(
+            id=entry.id,
+            action=entry.action,
+            performed_by_teacher_name=entry.performed_by.name if entry.performed_by else "",
+            reason=entry.reason,
+            account_name=entry.account.name if entry.account else None,
+            paid_date=entry.paid_date,
+            created_at=entry.created_at,
+        )
+        for entry in audit_entries
+    ]
 
 
 @router.get(
@@ -4907,6 +5060,8 @@ async def delete_expense(
     expense = result.scalar_one_or_none()
     if not expense:
         raise HTTPException(status_code=404, detail="Gasto no encontrado en tu organización.")
+    if expense.status == ExpenseStatus.PAID:
+        raise HTTPException(status_code=409, detail="No se puede eliminar un gasto pagado, primero hay que revertirlo.")
 
     await db.delete(expense)
     await db.commit()
@@ -5430,7 +5585,6 @@ async def get_cash_account_ledger(
         )
         .where(
             Payment.account_id == account_id,
-            Payment.voided_at.is_(None),
         )
     )
     payments = pay_result.scalars().all()
@@ -5475,6 +5629,7 @@ async def get_cash_account_ledger(
             "amount": Decimal(str(p.amount)),
             "created_at": p.created_at or datetime_type.min,
             "id_sort": p.id,
+            "is_voided": p.voided_at is not None,
         })
 
     for e in expenses:
@@ -5486,6 +5641,7 @@ async def get_cash_account_ledger(
             "amount": -Decimal(str(e.amount)),
             "created_at": e.created_at or datetime_type.min,
             "id_sort": e.id,
+            "is_voided": False,
         })
 
     for pp in personnel_payments:
@@ -5498,6 +5654,7 @@ async def get_cash_account_ledger(
             "amount": -Decimal(str(pp.total_amount)),
             "created_at": pp.updated_at or pp.created_at or datetime_type.min,
             "id_sort": pp.id,
+            "is_voided": False,
         })
 
     for m in movements:
@@ -5518,6 +5675,7 @@ async def get_cash_account_ledger(
             "amount": signed_amount,
             "created_at": m.created_at or datetime_type.min,
             "id_sort": m.id,
+            "is_voided": False,
         })
 
     # Ordenar cronológicamente ascendente para cálculo del running_balance
@@ -5525,7 +5683,8 @@ async def get_cash_account_ledger(
 
     running = account.opening_balance
     for item in raw_entries:
-        running += item["amount"]
+        if not item.get("is_voided"):
+            running += item["amount"]
         item["running_balance"] = running
 
     # Filtrar por rango de fechas si fue solicitado
@@ -5549,6 +5708,7 @@ async def get_cash_account_ledger(
             counterpart_name=item["counterpart_name"],
             amount=item["amount"],
             running_balance=item["running_balance"],
+            is_voided=item.get("is_voided", False),
         )
         for item in paged_slice
     ]

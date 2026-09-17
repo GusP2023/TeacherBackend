@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .organization import Organization
     from .cash_account import CashAccount
     from .recurring_expense_template import RecurringExpenseTemplate
+    from .expense_audit import ExpenseAudit
 
 
 class ExpenseCategory(str, enum.Enum):
@@ -190,6 +191,18 @@ class Expense(Base, TimestampMixin):
         "RecurringExpenseTemplate",
         lazy="selectin"
     )
+
+    audit_entries: Mapped[list["ExpenseAudit"]] = relationship(
+        "ExpenseAudit",
+        back_populates="expense",
+        lazy="selectin",
+        order_by="ExpenseAudit.created_at",
+        cascade="all, delete-orphan",
+    )
+
+    @property
+    def revision_count(self) -> int:
+        return len(self.audit_entries)
 
     # ========================================
     # CONSTRAINTS

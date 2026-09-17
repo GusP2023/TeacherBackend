@@ -64,6 +64,10 @@ class PersonnelPaymentPayRequest(BaseModel):
     invoice_notes:  str | None = None
 
 
+class PersonnelPaymentRevertRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
 class TeacherSimple(BaseModel):
     id:   int
     name: str
@@ -107,6 +111,7 @@ class PersonnelPaymentAuditResponse(BaseModel):
     invoice_number:            str | None
     invoice_date:              date | None
     invoice_notes:             str | None
+    reason:                    str | None = None
     created_at:                datetime
 
     model_config = ConfigDict(from_attributes=True)
