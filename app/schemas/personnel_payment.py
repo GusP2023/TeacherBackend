@@ -112,6 +112,8 @@ class PersonnelPaymentAuditResponse(BaseModel):
     invoice_date:              date | None
     invoice_notes:             str | None
     reason:                    str | None = None
+    account_id:                int | None = None
+    account_name:              str | None = None
     created_at:                datetime
 
     model_config = ConfigDict(from_attributes=True)

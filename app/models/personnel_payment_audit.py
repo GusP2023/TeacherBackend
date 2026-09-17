@@ -13,6 +13,7 @@ from .base import Base
 if TYPE_CHECKING:
     from .personnel_payment import PersonnelPayment
     from .teacher import Teacher
+    from .cash_account import CashAccount
 
 
 class PersonnelPaymentAudit(Base):
@@ -39,6 +40,13 @@ class PersonnelPaymentAudit(Base):
         index=True,
     )
 
+    account_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("cash_accounts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     invoice_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     invoice_date:   Mapped[date | None] = mapped_column(Date, nullable=True)
     invoice_notes:  Mapped[str | None]  = mapped_column(Text, nullable=True)
@@ -62,9 +70,18 @@ class PersonnelPaymentAudit(Base):
         lazy="selectin",
     )
 
+    account: Mapped["CashAccount | None"] = relationship(
+        "CashAccount",
+        lazy="selectin",
+    )
+
     @property
     def performed_by_teacher_name(self) -> str:
         return self.performed_by.name if self.performed_by else ""
+
+    @property
+    def account_name(self) -> str | None:
+        return self.account.name if self.account else None
 
     __table_args__ = (
         CheckConstraint(

@@ -39,9 +39,21 @@ class BillingPeriodResponse(BaseModel):
     status: str
     due_date: date | None = None
     notes: str | None = None
+    waived_reason: str | None = None
+    waived_by_teacher_id: int | None = None
+    waived_by_teacher_name: str | None = None
+    waived_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class BillingPeriodWaiveRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class BillingPeriodUnwaiveRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500)
 
 
 class BillingPeriodUpdate(BaseModel):

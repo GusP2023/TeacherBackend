@@ -5,9 +5,9 @@ Enrollments suspended o withdrawn NO generan BillingPeriod.
 Almacena snapshot de montos al momento de generación para preservar histórico.
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
-from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, UniqueConstraint, Numeric, Text
+from sqlalchemy import String, Integer, Date, Enum as SQLEnum, ForeignKey, CheckConstraint, UniqueConstraint, Numeric, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List, TYPE_CHECKING
 import enum
@@ -18,6 +18,7 @@ from .base import Base, TimestampMixin
 if TYPE_CHECKING:
     from .enrollment import Enrollment
     from .payment import Payment
+    from .teacher import Teacher
 
 
 class BillingPeriodStatus(str, enum.Enum):
@@ -178,6 +179,25 @@ class BillingPeriod(Base, TimestampMixin):
         comment="Para clase_suelta: cantidad de créditos a otorgar al pagar"
     )
 
+    waived_reason: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="Motivo por el cual se condonó el período de cobro"
+    )
+
+    waived_by_teacher_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("teachers.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Profesor/admin que condonó el período de cobro"
+    )
+
+    waived_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="Fecha y hora de condonación"
+    )
+
     # ========================================
     # RELACIONES
     # ========================================
@@ -192,6 +212,16 @@ class BillingPeriod(Base, TimestampMixin):
         cascade="all, delete-orphan",
         lazy="noload"
     )
+
+    waived_by: Mapped["Teacher | None"] = relationship(
+        "Teacher",
+        foreign_keys=[waived_by_teacher_id],
+        lazy="selectin",
+    )
+
+    @property
+    def waived_by_teacher_name(self) -> str | None:
+        return self.waived_by.name if self.waived_by else None
 
     # ========================================
     # CONSTRAINTS

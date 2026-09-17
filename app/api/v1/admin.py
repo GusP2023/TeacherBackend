@@ -84,6 +84,7 @@ from app.schemas.billing import (
     StudentBrief as BillingStudentBrief,
     EnrollmentBrief,
     PaymentCreate, PaymentResponse, PaymentVoidRequest,
+    BillingPeriodWaiveRequest, BillingPeriodUnwaiveRequest,
 )
 from app.schemas.personnel_payment import (
     PersonnelPaymentPreviewRequest, PersonnelPaymentPreviewResponse,
@@ -495,6 +496,10 @@ def _build_bp_response(bp: BillingPeriod, amount_paid: Decimal,
         status=bp.status.value if hasattr(bp.status, 'value') else bp.status,
         due_date=bp.due_date,
         notes=bp.notes,
+        waived_reason=bp.waived_reason,
+        waived_by_teacher_id=bp.waived_by_teacher_id,
+        waived_by_teacher_name=bp.waived_by_teacher_name,
+        waived_at=bp.waived_at,
         created_at=bp.created_at,
         updated_at=bp.updated_at,
     )
@@ -968,6 +973,7 @@ async def update_billing_period(
 )
 async def waive_billing_period(
     billing_period_id: int,
+    body: BillingPeriodWaiveRequest,
     db: AsyncSession = Depends(get_db),
     current_teacher: Teacher = Depends(require_permission("finances.manage_billing")),
 ):
@@ -996,12 +1002,76 @@ async def waive_billing_period(
         raise HTTPException(status_code=409, detail="Este período ya fue condonado.")
 
     bp.status = BillingPeriodStatus.WAIVED
+    bp.waived_reason = body.reason
+    bp.waived_by_teacher_id = current_teacher.id
+    bp.waived_at = datetime.utcnow()
+    bp.waived_by = current_teacher
+
     await db.commit()
     await db.refresh(bp)
 
-    enrollment = bp.enrollment
-    student    = enrollment.student if enrollment else None
-    instrument = enrollment.instrument if enrollment else None
+    paid_result = await db.execute(
+        select(func.coalesce(func.sum(Payment.amount), 0))
+        .where(
+            Payment.billing_period_id == bp.id,
+            Payment.voided_at.is_(None),
+        )
+    )
+    amount_paid = Decimal(str(paid_result.scalar_one()))
+
+    teacher_name = (
+        bp.enrollment.teacher.name
+        if bp.enrollment and bp.enrollment.teacher
+        else "—"
+    )
+    return _build_bp_response(bp, amount_paid, teacher_name)
+
+
+@router.post(
+    "/billing-periods/{billing_period_id}/unwaive",
+    response_model=BillingPeriodResponse,
+    summary="Revertir la condonación de un período de cobro",
+)
+async def unwaive_billing_period(
+    billing_period_id: int,
+    body: BillingPeriodUnwaiveRequest,
+    db: AsyncSession = Depends(get_db),
+    current_teacher: Teacher = Depends(require_permission("finances.manage_billing")),
+):
+    """
+    Revierte la condonación de un BillingPeriod (status=waived).
+    Limpia los datos de condonación y recalcula el status según pagos existentes.
+    """
+    if not current_teacher.organization_id:
+        raise HTTPException(status_code=400, detail="Sin organización asociada.")
+
+    result = await db.execute(
+        select(BillingPeriod)
+        .join(Enrollment, Enrollment.id == BillingPeriod.enrollment_id)
+        .join(Teacher, Teacher.id == Enrollment.teacher_id)
+        .where(
+            BillingPeriod.id == billing_period_id,
+            Teacher.organization_id == current_teacher.organization_id,
+        )
+    )
+    bp = result.scalar_one_or_none()
+    if not bp:
+        raise HTTPException(status_code=404, detail="Período de cobro no encontrado.")
+    if bp.status != BillingPeriodStatus.WAIVED:
+        raise HTTPException(
+            status_code=409,
+            detail="Solo se puede revertir la condonación de un período con estado waived."
+        )
+
+    bp.waived_reason = None
+    bp.waived_by_teacher_id = None
+    bp.waived_at = None
+    bp.waived_by = None
+    bp.status = BillingPeriodStatus.PENDING
+
+    await _recalculate_billing_status(db, bp.id)
+    await db.commit()
+    await db.refresh(bp)
 
     paid_result = await db.execute(
         select(func.coalesce(func.sum(Payment.amount), 0))
@@ -4089,6 +4159,7 @@ async def create_personnel_payment(
             invoice_number=payment.invoice_number,
             invoice_date=payment.invoice_date,
             invoice_notes=payment.invoice_notes,
+            account_id=account_id,
         )
         db.add(audit)
 
@@ -4261,6 +4332,7 @@ async def pay_personnel_payment(
         invoice_number=payment.invoice_number,
         invoice_date=payment.invoice_date,
         invoice_notes=payment.invoice_notes,
+        account_id=body.account_id,
     )
     db.add(audit)
 
@@ -4343,7 +4415,10 @@ async def get_personnel_payment_audit(
 
     audit_result = await db.execute(
         select(PersonnelPaymentAudit)
-        .options(selectinload(PersonnelPaymentAudit.performed_by))
+        .options(
+            selectinload(PersonnelPaymentAudit.performed_by),
+            selectinload(PersonnelPaymentAudit.account),
+        )
         .where(PersonnelPaymentAudit.payment_id == payment_id)
         .order_by(PersonnelPaymentAudit.created_at.asc())
     )
@@ -4359,6 +4434,8 @@ async def get_personnel_payment_audit(
             invoice_date=entry.invoice_date,
             invoice_notes=entry.invoice_notes,
             reason=entry.reason,
+            account_id=entry.account_id,
+            account_name=entry.account_name,
             created_at=entry.created_at,
         )
         for entry in audit_entries
@@ -5595,25 +5672,29 @@ async def get_cash_account_ledger(
     )
     payments = pay_result.scalars().all()
 
-    # 2. Expenses pagados
-    exp_result = await db.execute(
-        select(Expense).where(
-            Expense.account_id == account_id,
-            Expense.status == ExpenseStatus.PAID,
-        )
-    )
-    expenses = exp_result.scalars().all()
-
-    # 3. PersonnelPayments pagados
-    pers_result = await db.execute(
-        select(PersonnelPayment)
-        .options(selectinload(PersonnelPayment.teacher))
+    # 2. ExpenseAudits (action='paid')
+    exp_audit_result = await db.execute(
+        select(ExpenseAudit)
+        .options(selectinload(ExpenseAudit.expense))
         .where(
-            PersonnelPayment.account_id == account_id,
-            PersonnelPayment.status == PersonnelPaymentStatus.PAID,
+            ExpenseAudit.account_id == account_id,
+            ExpenseAudit.action == "paid",
         )
     )
-    personnel_payments = pers_result.scalars().all()
+    expense_audits = exp_audit_result.scalars().all()
+
+    # 3. PersonnelPaymentAudits (action='paid')
+    pers_audit_result = await db.execute(
+        select(PersonnelPaymentAudit)
+        .options(
+            selectinload(PersonnelPaymentAudit.payment).selectinload(PersonnelPayment.teacher)
+        )
+        .where(
+            PersonnelPaymentAudit.account_id == account_id,
+            PersonnelPaymentAudit.action == "paid",
+        )
+    )
+    personnel_audits = pers_audit_result.scalars().all()
 
     # 4. AccountMovements
     mov_result = await db.execute(
@@ -5633,34 +5714,43 @@ async def get_cash_account_ledger(
             "description": p.concept.value if hasattr(p.concept, "value") else str(p.concept),
             "counterpart_name": p.enrollment.student.name if (p.enrollment and p.enrollment.student) else None,
             "amount": Decimal(str(p.amount)),
-            "created_at": p.created_at or datetime_type.min,
+            "created_at": p.created_at.replace(tzinfo=None) if p.created_at else datetime_type.min,
             "id_sort": p.id,
             "is_voided": p.voided_at is not None,
         })
 
-    for e in expenses:
+    for ea in expense_audits:
+        e = ea.expense
+        if not e:
+            continue
+        item_date = ea.paid_date or e.paid_date or e.expense_date
+        is_voided = (e.status != ExpenseStatus.PAID)
         raw_entries.append({
-            "date": e.paid_date or e.expense_date,
+            "date": item_date,
             "type": "gasto",
             "description": e.description,
             "counterpart_name": None,
             "amount": -Decimal(str(e.amount)),
-            "created_at": e.created_at or datetime_type.min,
-            "id_sort": e.id,
-            "is_voided": False,
+            "created_at": ea.created_at.replace(tzinfo=None) if ea.created_at else datetime_type.min,
+            "id_sort": ea.id,
+            "is_voided": is_voided,
         })
 
-    for pp in personnel_payments:
-        item_date = pp.invoice_date or (pp.updated_at.date() if pp.updated_at else pp.period_to)
+    for pa in personnel_audits:
+        pp = pa.payment
+        if not pp:
+            continue
+        item_date = pa.invoice_date or pp.invoice_date or (pa.created_at.date() if pa.created_at else pp.period_to)
+        is_voided = (pp.status != PersonnelPaymentStatus.PAID)
         raw_entries.append({
             "date": item_date,
             "type": "liquidacion",
             "description": f"Liquidación {pp.period_from}–{pp.period_to}",
             "counterpart_name": pp.teacher.name if pp.teacher else None,
             "amount": -Decimal(str(pp.total_amount)),
-            "created_at": pp.updated_at or pp.created_at or datetime_type.min,
-            "id_sort": pp.id,
-            "is_voided": False,
+            "created_at": pa.created_at.replace(tzinfo=None) if pa.created_at else datetime_type.min,
+            "id_sort": pa.id,
+            "is_voided": is_voided,
         })
 
     for m in movements:
