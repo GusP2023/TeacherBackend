@@ -106,6 +106,7 @@ class PaymentCreate(BaseModel):
     account_id: int
     notes: str | None = None
     reference: str | None = None
+    batch_id: str | None = Field(None, max_length=36, description="UUID de agrupación para pagos combinados. Lo genera el frontend.")
 
 
 class PaymentVoidRequest(BaseModel):
@@ -122,6 +123,7 @@ class PaymentResponse(BaseModel):
     payment_method: str
     notes: str | None
     reference: str | None = None
+    batch_id: str | None = None
     student_name: str
     instrument_name: str
     account_id: int | None = None

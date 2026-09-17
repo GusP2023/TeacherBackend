@@ -27,6 +27,14 @@ class CashAccountResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class LedgerSubItem(BaseModel):
+    description: str | None = None
+    amount: Decimal
+    is_voided: bool = False
+    reason: str | None = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class LedgerItem(BaseModel):
     date: date
     type: str
@@ -36,6 +44,9 @@ class LedgerItem(BaseModel):
     running_balance: Decimal
     is_voided: bool = False
     reason: str | None = None
+    is_grouped: bool = False
+    group_count: int | None = None
+    sub_items: list[LedgerSubItem] | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

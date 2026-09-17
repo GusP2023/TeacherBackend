@@ -193,6 +193,14 @@ class Payment(Base, TimestampMixin):
         comment="Referencia bancaria o número de recibo (opcional)"
     )
 
+    payment_batch_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+        index=True,
+        comment="UUID compartido por todos los Payment creados en una misma "
+                "operación de pago combinado. NULL para pagos individuales."
+    )
+
     voided_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

@@ -64,6 +64,7 @@ from app.schemas.cash_account import (
     CashAccountUpdate,
     CashAccountResponse,
     LedgerItem,
+    LedgerSubItem,
     AccountLedgerResponse,
 )
 from app.schemas.account_movement import AccountMovementCreate, AccountTransferCreate, AccountMovementResponse
@@ -1221,6 +1222,7 @@ async def create_payment(
         payment_method=PaymentMethod(data.payment_method),
         notes=data.notes,
         reference=data.reference,
+        payment_batch_id=data.batch_id,
     )
     payment.account = cash_account
     db.add(payment)
@@ -1276,6 +1278,7 @@ async def create_payment(
         payment_method=payment.payment_method.value if hasattr(payment.payment_method, 'value') else payment.payment_method,
         notes=payment.notes,
         reference=payment.reference,
+        batch_id=payment.payment_batch_id,
         student_name=student.name if student else "—",
         instrument_name=instrument.name if instrument else "—",
         voided_at=payment.voided_at,
@@ -5661,11 +5664,17 @@ async def get_cash_account_ledger(
     if not account:
         raise HTTPException(status_code=404, detail="Cuenta no encontrada en tu organización.")
 
+    MONTH_NAMES_ES = [
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+    ]
+
     # 1. Payments (Cobros de alumnos)
     pay_result = await db.execute(
         select(Payment)
         .options(
-            selectinload(Payment.enrollment).selectinload(Enrollment.student)
+            selectinload(Payment.enrollment).selectinload(Enrollment.student),
+            selectinload(Payment.billing_period),
         )
         .where(
             Payment.account_id == account_id,
@@ -5739,6 +5748,9 @@ async def get_cash_account_ledger(
             "id_sort": p.id,
             "is_voided": p.voided_at is not None,
             "reason": p.void_reason if p.voided_at else None,
+            "batch_id": p.payment_batch_id,
+            "period_year": p.billing_period.period_year if p.billing_period else None,
+            "period_month": p.billing_period.period_month if p.billing_period else None,
         })
 
     for e in expenses:
@@ -5839,6 +5851,41 @@ async def get_cash_account_ledger(
             running += item["amount"]
         item["running_balance"] = running
 
+    from collections import OrderedDict
+
+    grouped: OrderedDict[str, dict] = OrderedDict()
+    result_entries: list[dict] = []
+    for item in raw_entries:
+        bid = item.get("batch_id")
+        if item["type"] != "cobro" or not bid:
+            result_entries.append(item)
+            continue
+        if bid not in grouped:
+            merged = dict(item)
+            merged["sub_items"] = [item]
+            merged["group_count"] = 1
+            merged["amount"] = Decimal("0.00") if item.get("is_voided") else item["amount"]
+            grouped[bid] = merged
+            result_entries.append(merged)
+        else:
+            g = grouped[bid]
+            g["sub_items"].append(item)
+            g["group_count"] += 1
+            # Solo suma al total visible los activos (no anulados)
+            if not item.get("is_voided"):
+                g["amount"] += item["amount"]
+            # El running_balance mostrado es el del ÚLTIMO evento del grupo
+            # (ya refleja el acumulado real a esa altura)
+            g["running_balance"] = item["running_balance"]
+            g["is_voided"] = all(si.get("is_voided") for si in g["sub_items"])
+            g["counterpart_name"] = item.get("counterpart_name") or g.get("counterpart_name")
+
+    for g in grouped.values():
+        if g.get("is_voided"):
+            g["amount"] = sum((si["amount"] for si in g["sub_items"]), Decimal("0.00"))
+
+    raw_entries = result_entries
+
     # Filtrar por rango de fechas si fue solicitado
     if from_date is not None:
         raw_entries = [item for item in raw_entries if item["date"] >= from_date]
@@ -5862,6 +5909,21 @@ async def get_cash_account_ledger(
             running_balance=item["running_balance"],
             is_voided=item.get("is_voided", False),
             reason=item.get("reason"),
+            is_grouped=item.get("group_count", 1) > 1,
+            group_count=item.get("group_count"),
+            sub_items=[
+                LedgerSubItem(
+                    description=(
+                        f"{si['description']} · "
+                        f"{MONTH_NAMES_ES[si['period_month']-1]} {si['period_year']}"
+                        if si.get("period_month") else si["description"]
+                    ),
+                    amount=si["amount"],
+                    is_voided=si.get("is_voided", False),
+                    reason=si.get("reason"),
+                )
+                for si in item.get("sub_items", [])
+            ] if item.get("group_count", 1) > 1 else None,
         )
         for item in paged_slice
     ]
