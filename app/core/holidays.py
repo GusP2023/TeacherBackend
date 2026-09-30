@@ -86,6 +86,10 @@ HOLIDAYS_2026 = [
     date(2026, 8, 6),   # Día de la Independencia de Bolivia
     date(2026, 8, 7),   # Día de la Independencia de Bolivia
 
+    # Septiembre
+    date(2025, 9, 24),   # Aniversario de Santa Cruz
+    date(2025, 9, 25),   # Aniversario de Santa Cruz
+
     # Noviembre
     date(2026, 11, 2),  # Día de Todos los Santos
 
